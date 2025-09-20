@@ -1,0 +1,35 @@
+<!doctype html><meta charset="utf-8">
+<title>SQLite init debug</title>
+<div id="log" style="font:14px/1.4 system-ui;padding:16px"></div>
+<script>
+const log = (m)=>{ const d=document.getElementById('log'); d.innerHTML += m+'<br>'; console.log(m); };
+const SQLITE_BASE = './lib/sqlite/';
+function loadScript(url){
+  return new Promise((res,rej)=>{
+    const s=document.createElement('script'); s.src=url; s.async=true;
+    s.onload=()=>res(log('✓ loaded: '+url));
+    s.onerror=()=>rej(new Error('script load failed: '+url));
+    document.head.appendChild(s);
+  });
+}
+(async () => {
+  try{
+    log('Step 1: load sqlite3.js');
+    await loadScript(SQLITE_BASE+'sqlite3.js');
+    if(!('sqlite3InitModule' in self)) throw new Error('sqlite3InitModule missing');
+    log('Step 2: init WASM (fetches sqlite3.wasm + proxy worker)');
+    const sqlite3 = await self.sqlite3InitModule({ locateFile: f => SQLITE_BASE+f });
+    log('Step 3: module OK. Trying OPFS open…');
+    let db, mode='?';
+    try{
+      if (sqlite3?.oo1?.OpfsDb) { db = new sqlite3.oo1.OpfsDb('notes.db','c'); mode='OPFS'; }
+      else { db = new sqlite3.oo1.DB('file:notes.db?vfs=opfs','c'); mode='opfs vfs'; }
+    }catch(e){
+      log('OPFS open failed → transient DB: '+e.message);
+      db = new sqlite3.oo1.DB('/session.db','c'); mode='non-persistent';
+    }
+    db.exec('select 1;');
+    log('✓ DB open OK ('+mode+')');
+  }catch(e){ log('ERROR: '+(e.message||e)); }
+})();
+</script>
