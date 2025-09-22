@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>Techstudy — Subjects → Topics → Chunks</title>
+<title>TechStudy — Subjects → Topics → Chunks — Notes (SQLite + IndexedDB)</title>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <style>
 :root{--bg:#0f1220;--card:#181c2f;--ink:#eef1ff;--muted:#9aa3c7;--line:#2a3052;--ok:#7bd88f;--bad:#ff7575;--accent:#6ca8ff}
@@ -12,10 +12,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple
 .wrap{max-width:1200px;margin:0 auto;padding:12px}
 h1{font-size:18px;margin:0 0 12px}
 .tag{display:inline-block;font-size:12px;background:#0b1128;border:1px solid var(--line);padding:2px 8px;border-radius:10px;margin-left:8px}
-.app{display:grid;grid-template-columns:420px 1fr;gap:16px} @media(max-width:960px){.app{grid-template-columns:1fr}}
+.app{display:grid;grid-template-columns:420px 1fr;gap:16px}
+@media(max-width:960px){.app{grid-template-columns:1fr}}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-input[type=text],input[type=url]{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#0b1020;color:var(--ink)}
+input[type=text],input[type=url],input[type=password]{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#0b1020;color:var(--ink)}
 button{padding:10px 14px;border:0;border-radius:14px;background:var(--accent);color:#081225;font-weight:600;cursor:pointer}
 button.ghost{background:#232a48;color:var(--ink)} button.warn{background:var(--bad);color:#200} button.slim{padding:6px 10px;border-radius:10px}
 hr{border:0;border-top:1px dashed var(--line);margin:12px 0}
@@ -38,22 +39,15 @@ hr{border:0;border-top:1px dashed var(--line);margin:12px 0}
 .card .thumbs img{height:44px;border-radius:6px;border:1px solid var(--line);cursor:pointer}
 .small{font-size:12px;color:var(--muted)}
 input[type=file]{display:none}
-.filelabel{display:inline-block;padding:10px 14px;border-radius:14px;background:var(--ok);color:#102b18;font-weight:700;cursor:pointer}
+.filelabel{display:inline-block;padding:10px 14px;border-radius:14px;background:#7bd88f;color:#102b18;font-weight:700;cursor:pointer}
 a.link{color:#8fb5ff;text-decoration:none}
 .iconbtn{background:#232a48;color:var(--ink);border-radius:10px;padding:6px 10px}
 .icon{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-
 /* Lightbox */
 .lightbox{position:fixed; inset:0; background:rgba(0,0,0,.92); display:none; z-index:9999}
 .lightbox.show{display:block}
-.lightbox-close{
-  position:fixed; top:10px; right:10px; background:#fff; border:0; border-radius:999px;
-  width:36px; height:36px; font-weight:900; cursor:pointer; z-index:10001;
-}
-.lightbox .viewport{
-  position:absolute; inset:0; overflow:auto; -webkit-overflow-scrolling:touch;
-  padding:16px; touch-action:auto; z-index:10000;
-}
+.lightbox-close{position:fixed; top:10px; right:10px; background:#fff; border:0; border-radius:999px; width:36px; height:36px; font-weight:900; cursor:pointer; z-index:10001}
+.lightbox .viewport{position:absolute; inset:0; overflow:auto; -webkit-overflow-scrolling:touch; padding:16px; touch-action:auto; z-index:10000}
 .lightbox .stack{display:flex; flex-direction:column; gap:12px; transform-origin:top left}
 .lightbox .stack img{max-width:95vw; height:auto; display:block; border-radius:8px}
 .lightbox.zoomed .stack{ transform:scale(var(--z,1)); }
@@ -62,8 +56,9 @@ a.link{color:#8fb5ff;text-decoration:none}
 <body>
 <div class="wrap">
   <h1>
-    Techstudy — Subjects → Topics → Chunks
+    TechStudy — Subjects → Topics → Chunks — Notes (SQLite + IndexedDB)
     <span id="dbStatus" class="tag">DB: starting…</span>
+    <span id="netTag" class="tag">Online</span>
   </h1>
 
   <div class="app">
@@ -72,6 +67,29 @@ a.link{color:#8fb5ff;text-decoration:none}
         <input id="newSubject" type="text" placeholder="New subject name"/>
         <button id="addSubject">+ Subject</button>
       </div>
+
+      <!-- CouchDB panel -->
+      <div class="subject">
+        <header><h2 style="margin:0">CouchDB Sync</h2></header>
+        <div class="row">
+          <input id="couchUrl" type="url" placeholder="https://couch.techstudy.me"/>
+          <input id="couchDb" type="text" placeholder="db name (techstudy)"/>
+        </div>
+        <!-- Hidden creds (DB can be open). Remove style to show again. -->
+        <div class="row" id="credsRow" style="display:none">
+          <input id="couchUser" type="text" placeholder="user"/>
+          <input id="couchPass" type="password" placeholder="password"/>
+        </div>
+        <div class="row">
+          <button class="ghost slim" id="couchSave">Save</button>
+          <button class="ghost slim" id="couchTest">Test</button>
+          <button id="couchSync">Sync now</button>
+          <button class="ghost slim" id="couchPull">Pull now</button>
+        </div>
+        <div class="small" id="couchMsg"></div>
+      </div>
+      <!-- /CouchDB panel -->
+
       <div id="subjects"></div>
     </div>
 
@@ -115,14 +133,12 @@ a.link{color:#8fb5ff;text-decoration:none}
 <!-- Lightbox -->
 <div id="lightbox" class="lightbox" aria-hidden="true">
   <button class="lightbox-close" aria-label="Close">×</button>
-  <div class="viewport">
-    <div class="stack" id="lbStack"></div>
-  </div>
+  <div class="viewport"><div class="stack" id="lbStack"></div></div>
 </div>
 
 <script>
+/* Register the TechStudy SW */
 if ('serviceWorker' in navigator) {
-  // distinct SW for the Techstudy app
   navigator.serviceWorker.register('./sw.techstudy.js', { scope: './' }).catch(()=>{});
 }
 </script>
@@ -130,24 +146,16 @@ if ('serviceWorker' in navigator) {
 <script type="module">
 (async () => {
   const statusEl = document.getElementById('dbStatus');
+  const netTag = document.getElementById('netTag');
   const SQLJS_BASE = './lib/sqljs/';
-
-  /* ---------- constants for THIS APP ---------- */
-  const APP_NS             = 'techstudy';
-  const IDB_NAME           = 'study-notes-idb-techstudy';
-  const STORE_SQLITE       = 'sqlite';
-  const STORE_IMAGES       = 'images';
-  const SQLITE_KEY         = 'main-techstudy';
-  const COLL_SUBJECTS_KEY  = 'coll-subjects-techstudy';
-  const COLL_TOPICS_KEY    = 'coll-topics-techstudy';
-  const IMG_PREFIX         = '/techstudy-images';
-
   const setStatus = (t, ok=true) => {
     statusEl.textContent = t;
     statusEl.style.borderColor = ok ? 'var(--line)' : 'var(--bad)';
-    if (ok && t.includes('Saved')) setTimeout(()=>{ statusEl.textContent = 'DB: OK (IndexedDB — techstudy)'; }, 800);
+    if (ok && t.includes('Saved')) setTimeout(()=>{ statusEl.textContent = 'DB: OK (IndexedDB)'; }, 800);
   };
-  const esc = s => (s??'').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;","/>":"&#x2F;","\"":"&quot;","'":"&#039;"}[m]||m));
+  const setNet = () => netTag.textContent = navigator.onLine ? 'Online' : 'Offline';
+  setNet(); window.addEventListener('online', setNet); window.addEventListener('offline', setNet);
+  const esc = s => (s??'').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
 
   function loadScript(url){
     return new Promise((resolve,reject)=>{
@@ -157,7 +165,10 @@ if ('serviceWorker' in navigator) {
     });
   }
 
-  /* ---------- IndexedDB ---------- */
+  /* ---------- IndexedDB (namespaced for TechStudy) ---------- */
+  const IDB_NAME = 'study-notes-idb-techstudy';
+  const STORE_SQLITE = 'sqlite';
+  const STORE_IMAGES = 'images';
   const idb = await new Promise((resolve,reject)=>{
     const req = indexedDB.open(IDB_NAME, 1);
     req.onupgradeneeded = () => {
@@ -184,7 +195,7 @@ if ('serviceWorker' in navigator) {
   /* ---------- sql.js ---------- */
   await loadScript(SQLJS_BASE + 'sql-wasm.js');
   const SQL = await window.initSqlJs({ locateFile: f => SQLJS_BASE + f });
-  const raw = await idbGet(STORE_SQLITE, SQLITE_KEY);
+  const raw = await idbGet(STORE_SQLITE, 'main');
   const db = raw ? new SQL.Database(raw instanceof Uint8Array ? raw : new Uint8Array(raw)) : new SQL.Database();
 
   db.exec(`
@@ -225,10 +236,27 @@ if ('serviceWorker' in navigator) {
       created_at integer default (strftime('%s','now')),
       unique(note_id,page)
     );
+    /* --- Auto-sync bookkeeping --- */
+    create table if not exists sync_outbox(
+      id integer primary key,
+      doc_id text not null,
+      doc_type text not null,
+      action text not null check(action in ('upsert','delete')),
+      payload text,
+      created_at integer default (strftime('%s','now'))
+    );
+    create table if not exists sync_checkpoints(
+      key text primary key,
+      value text
+    );
+    create table if not exists rev_map(
+      doc_id text primary key,
+      rev text
+    );
   `);
 
   let saveTimer;
-  const saveDB = async ()=>{ await idbSet(STORE_SQLITE, SQLITE_KEY, db.export()); setStatus('Saved ✓'); };
+  const saveDB = async ()=>{ await idbSet(STORE_SQLITE,'main',db.export()); setStatus('Saved ✓'); };
   const scheduleSave = ()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(saveDB,250); };
 
   const driver = {
@@ -258,15 +286,37 @@ if ('serviceWorker' in navigator) {
     driver.exec(`delete from notes where id=?`, [noteId]);
   }
 
-  /* ---------- collapse state (namespaced) ---------- */
+  /* ---------- collapse state ---------- */
   const collapsed = {
-    subjects: new Set(JSON.parse(localStorage.getItem(COLL_SUBJECTS_KEY)||'[]')),
-    topics:   new Set(JSON.parse(localStorage.getItem(COLL_TOPICS_KEY)||'[]'))
+    subjects: new Set(JSON.parse(localStorage.getItem('coll-subjects')||'[]')),
+    topics:   new Set(JSON.parse(localStorage.getItem('coll-topics')||'[]'))
   };
   const saveCollapse = () => {
-    localStorage.setItem(COLL_SUBJECTS_KEY, JSON.stringify([...collapsed.subjects]));
-    localStorage.setItem(COLL_TOPICS_KEY,   JSON.stringify([...collapsed.topics]));
+    localStorage.setItem('coll-subjects', JSON.stringify([...collapsed.subjects]));
+    localStorage.setItem('coll-topics',   JSON.stringify([...collapsed.topics]));
   };
+
+  /* ---------- SYNC helpers ---------- */
+  function queue(doc_id, doc_type, action, obj){
+    driver.exec(`insert into sync_outbox(doc_id,doc_type,action,payload) values(?,?,?,?)`,
+      [doc_id, doc_type, action, obj?JSON.stringify(obj):null]);
+  }
+  function setRev(doc_id, rev){
+    driver.exec(`insert into rev_map(doc_id,rev) values(?,?)
+                 on conflict(doc_id) do update set rev=excluded.rev`, [doc_id, rev]);
+  }
+  function getRev(doc_id){
+    const r = driver.select(`select rev from rev_map where doc_id=?`, [doc_id])[0];
+    return r?.rev || null;
+  }
+  function getSince(){
+    const r = driver.select(`select value from sync_checkpoints where key='since'`)[0];
+    return r?.value || '0';
+  }
+  function setSince(v){
+    driver.exec(`insert into sync_checkpoints(key,value) values('since',?)
+                 on conflict(key) do update set value=excluded.value`, [v]);
+  }
 
   /* ---------- UI refs ---------- */
   const subjectsEl = document.getElementById('subjects');
@@ -322,7 +372,6 @@ if ('serviceWorker' in navigator) {
       await renderTopics(s.id);
     }
   }
-
   async function renderTopics(subjectId){
     const list = document.getElementById(`topic-list-${subjectId}`); if(!list) return;
     const topics = driver.select(`
@@ -349,7 +398,6 @@ if ('serviceWorker' in navigator) {
     }).join('');
     for(const t of topics) await renderChunks(t.id);
   }
-
   async function renderChunks(topicId){
     const list = document.getElementById(`chunk-list-${topicId}`); if(!list) return;
     const chunks = driver.select(`select id,name from chunks where topic_id=? order by created_at asc`, [topicId]);
@@ -360,7 +408,7 @@ if ('serviceWorker' in navigator) {
     `).join('');
   }
 
-  /* ---------- left pane actions ---------- */
+  /* ---------- left pane actions + QUEUE ---------- */
   subjectsEl.addEventListener('click', async (e)=>{
     const el = e.target.closest('button, h3, .chunk-pill'); if(!el) return;
     const act = el.dataset.act, id = Number(el.dataset.id);
@@ -371,72 +419,102 @@ if ('serviceWorker' in navigator) {
         el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
         if(collapsedNow) collapsed.subjects.add(sid); else collapsed.subjects.delete(sid);
         saveCollapse();
+
       } else if(act==='toggle-topic'){
         const card = el.closest('.topic'); const tid = Number(id);
         const collapsedNow = card.classList.toggle('collapsed');
         el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
         if(collapsedNow) collapsed.topics.add(tid); else collapsed.topics.delete(tid);
         saveCollapse();
+
       } else if(act==='add-topic'){
         const sid=id; const inp=document.getElementById(`topic-input-${sid}`);
         const name=(inp.value||'').trim(); if(!name) return;
         driver.exec(`insert into topics(subject_id,name) values(?,?)`, [sid,name]);
-        inp.value=''; await renderTopics(sid);
+        const tid = driver.select(`select last_insert_rowid() as id`)[0].id;
+        queue(`topic:${tid}`,'topic','upsert',{id:tid,subject_id:sid,name,created_at:Math.floor(Date.now()/1000)});
+        await renderTopics(sid);
+
       } else if(act==='rename-subj'){
         const [r] = driver.select(`select name from subjects where id=?`, [id]);
         const name = prompt('Rename subject', r?.name||''); if(!name) return;
-        driver.exec(`update subjects set name=? where id=?`, [name,id]); await loadTree();
+        driver.exec(`update subjects set name=? where id=?`, [name,id]);
+        queue(`subject:${id}`,'subject','upsert',{id,name,created_at:Math.floor(Date.now()/1000)});
+        await loadTree();
+
       } else if(act==='del-subj'){
         if(!confirm('Delete subject and everything under it?')) return;
-        const noteIds = driver.select(`
+        const topicIds = driver.select(`select id from topics where subject_id=?`, [id]).map(x=>x.id);
+        const chunkIds = driver.select(`select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?`, [id]).map(x=>x.id);
+        const noteIds  = driver.select(`
           select n.id from notes n
-          where n.kind='image' and (
-            (n.scope='topic' and n.scope_id in (select id from topics where subject_id=?)) or
-            (n.scope='chunk' and n.scope_id in (select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?))
-          )`, [id,id]).map(r=>r.id);
-        for(const nid of noteIds) await deleteImageNoteCascade(nid);
+          where (n.scope='topic' and n.scope_id in (select id from topics where subject_id=?))
+             or (n.scope='chunk' and n.scope_id in (select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?))
+        `,[id,id]).map(x=>x.id);
+        for(const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
+        for(const cid of chunkIds) queue(`chunk:${cid}`,'chunk','delete',null);
+        for(const tid of topicIds) queue(`topic:${tid}`,'topic','delete',null);
+        queue(`subject:${id}`,'subject','delete',null);
+        for(const nid of noteIds){ await deleteImageNoteCascade(nid); }
         driver.exec(`delete from subjects where id=?`, [id]);
         collapsed.subjects.delete(id); saveCollapse();
         await loadTree(); setDetail(null,null,'');
+
       } else if(act==='rename-topic'){
         const [r] = driver.select(`select name,subject_id from topics where id=?`, [id]);
         const name = prompt('Rename topic', r?.name||''); if(!name) return;
         driver.exec(`update topics set name=? where id=?`, [name,id]);
+        queue(`topic:${id}`,'topic','upsert',{id,subject_id:r.subject_id,name,created_at:Math.floor(Date.now()/1000)});
         await renderTopics(r.subject_id);
         if(details.scope==='topic' && details.id===id) setDetail('topic',id,name);
+
       } else if(act==='del-topic'){
         if(!confirm('Delete topic, its chunks & notes?')) return;
-        const noteIds = driver.select(`
+        const [r] = driver.select(`select subject_id from topics where id=?`, [id]);
+        const chunkIds = driver.select(`select id from chunks where topic_id=?`, [id]).map(x=>x.id);
+        const noteIds  = driver.select(`
           select n.id from notes n
-          where n.kind='image' and (
-            (n.scope='topic' and n.scope_id=?) or
-            (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
-          )`, [id,id]).map(r=>r.id);
-        for(const nid of noteIds) await deleteImageNoteCascade(nid);
+          where (n.scope='topic' and n.scope_id=?)
+             or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
+        `,[id,id]).map(x=>x.id);
+        for(const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
+        for(const cid of chunkIds) queue(`chunk:${cid}`,'chunk','delete',null);
+        queue(`topic:${id}`,'topic','delete',null);
+        for(const nid of noteIds){ await deleteImageNoteCascade(nid); }
         driver.exec(`delete from topics where id=?`, [id]);
         collapsed.topics.delete(id); saveCollapse();
         await loadTree(); setDetail(null,null,'');
+
       } else if(act==='add-chunk'){
         const topicId = id;
         const name = prompt('New chunk name'); if(!name) return;
         driver.exec(`insert into chunks(topic_id,name) values(?,?)`, [topicId,name]);
+        const cid = driver.select(`select last_insert_rowid() as id`)[0].id;
+        queue(`chunk:${cid}`,'chunk','upsert',{id:cid,topic_id:topicId,name,created_at:Math.floor(Date.now()/1000)});
         await renderChunks(topicId);
+
       } else if(act==='rename-chunk'){
         const [r] = driver.select(`select name,topic_id from chunks where id=?`, [id]);
         const name = prompt('Rename chunk', r?.name||''); if(!name) return;
         driver.exec(`update chunks set name=? where id=?`, [name,id]);
+        queue(`chunk:${id}`,'chunk','upsert',{id,topic_id:r.topic_id,name,created_at:Math.floor(Date.now()/1000)});
         await renderChunks(r.topic_id);
         if(details.scope==='chunk' && details.id===id) setDetail('chunk', id, name);
+
       } else if(act==='del-chunk'){
         if(!confirm('Delete this chunk & its notes?')) return;
         const [r] = driver.select(`select topic_id from chunks where id=?`, [id]);
-        const noteIds = driver.select(`select id from notes where kind='image' and scope='chunk' and scope_id=?`, [id]).map(x=>x.id);
-        for(const nid of noteIds) await deleteImageNoteCascade(nid);
+        const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [id]).map(x=>x.id);
+        for(const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
+        queue(`chunk:${id}`,'chunk','delete',null);
+        for(const nid of noteIds){ await deleteImageNoteCascade(nid); }
         driver.exec(`delete from chunks where id=?`, [id]);
         await renderChunks(r.topic_id); setDetail(null,null,'');
+
       } else if(act==='open-topic'){
         const [r] = driver.select(`select name from topics where id=?`, [id]);
         setDetail('topic', id, r?.name||'Topic');
+
       } else if(act==='open-chunk'){
         const [r] = driver.select(`select name from chunks where id=?`, [id]);
         setDetail('chunk', id, r?.name||'Chunk');
@@ -448,6 +526,8 @@ if ('serviceWorker' in navigator) {
   const addSubject = () => {
     const name=(document.getElementById('newSubject').value||'').trim(); if(!name) return;
     driver.exec(`insert into subjects(name) values(?)`, [name]);
+    const sid = driver.select(`select last_insert_rowid() as id`)[0].id;
+    queue(`subject:${sid}`,'subject','upsert',{id:sid,name,created_at:Math.floor(Date.now()/1000)});
     document.getElementById('newSubject').value=''; loadTree();
   };
   document.getElementById('addSubject').addEventListener('click', addSubject);
@@ -460,6 +540,8 @@ if ('serviceWorker' in navigator) {
     const url=(document.getElementById('pdfUrl').value||'').trim(); if(!url) return alert('Add a valid URL');
     driver.exec(`insert into notes(scope,scope_id,kind,title,url) values(?,?,?,?,?)`,
       [details.scope,details.id,'pdf',title,url]);
+    const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
+    queue(`note:${nid}`,'note','upsert',{id:nid,scope:details.scope,scope_id:details.id,kind:'pdf',title,url,created_at:Math.floor(Date.now()/1000)});
     document.getElementById('pdfTitle').value=''; document.getElementById('pdfUrl').value='';
     loadNotes();
   });
@@ -469,12 +551,13 @@ if ('serviceWorker' in navigator) {
     for(const f of [...e.target.files]){
       const ext=(f.name.split('.').pop()||'png').toLowerCase();
       const id = crypto.randomUUID();
-      const previewPath=`${IMG_PREFIX}/${details.scope}/${details.id}/${id}.${ext}`;
+      const previewPath=`/images/${details.scope}/${details.id}/${id.${'ext'}}`.replace('${\'ext\'}', ext); // safe template
       await writeBlob(previewPath,f);
       driver.exec(`insert into notes(scope,scope_id,kind,title,path) values(?,?,?,?,?)`,
         [details.scope,details.id,'image',f.name,previewPath]);
-      const newNoteId = driver.select(`select last_insert_rowid() as id`)[0].id;
-      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [newNoteId,1,previewPath]);
+      const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
+      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid,1,previewPath]);
+      queue(`note:${nid}`,'note','upsert',{id:nid,scope:details.scope,scope_id:details.id,kind:'image',title:f.name,path:previewPath,created_at:Math.floor(Date.now()/1000)});
     }
     e.target.value=''; loadNotes();
   });
@@ -551,12 +634,12 @@ if ('serviceWorker' in navigator) {
     for(const f of [...fi.files]){
       const ext=(f.name.split('.').pop()||'png').toLowerCase();
       const id=crypto.randomUUID();
-      const path=`${IMG_PREFIX}/n${noteId}/${id}.${ext}`;
+      const path=`/images/n${noteId}/${id}.${ext}`;
       await writeBlob(path,f);
       driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId,next++,path]);
-      const head = driver.select(`select path from notes where id=?`, [noteId])[0];
-      if(!head.path) driver.exec(`update notes set path=? where id=?`, [path,noteId]);
     }
+    const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
+    if(n) queue(`note:${n.id}`,'note','upsert',n);
     fi.value=''; loadNotes();
   });
 
@@ -568,9 +651,12 @@ if ('serviceWorker' in navigator) {
       if(btn.dataset.act==='save-cap'){
         const cap = noteCard.querySelector('input.cap').value;
         driver.exec(`update notes set title=? where id=?`, [cap,id]);
+        const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
+        if(n) queue(`note:${n.id}`,'note','upsert',n);
       } else if(btn.dataset.act==='del-imgnote'){
         if(!confirm('Delete this image note (and all its pages)?')) return;
-        await deleteImageNoteCascade(id);
+        queue(`note:${Number(btn.dataset.id)}`,'note','delete',null);
+        await deleteImageNoteCascade(Number(btn.dataset.id));
         loadNotes();
       }
       return;
@@ -594,8 +680,11 @@ if ('serviceWorker' in navigator) {
       const title=card.querySelector('.pdftitle').value;
       const url=card.querySelector('.pdfurl').value;
       driver.exec(`update notes set title=?, url=? where id=?`, [title,url,id]);
+      const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
+      if(n) queue(`note:${n.id}`,'note','upsert',n);
     }else if(b.dataset.act==='del-pdf'){
       if(!confirm('Delete PDF link?')) return;
+      queue(`note:${id}`,'note','delete',null);
       driver.exec(`delete from notes where id=?`, [id]); loadNotes();
     }
   });
@@ -606,7 +695,6 @@ if ('serviceWorker' in navigator) {
   const lbClose = document.querySelector('.lightbox-close');
   const lbVP = lbEl.querySelector('.viewport');
   let lbZoom = 1;
-
   function lbUpdateZoom() {
     if(lbZoom===1){ lbEl.classList.remove('zoomed'); lbStack.style.setProperty('--z','1'); lbVP.scrollTop=lbVP.scrollLeft=0; }
     else { lbEl.classList.add('zoomed'); lbStack.style.setProperty('--z', String(lbZoom)); }
@@ -634,19 +722,321 @@ if ('serviceWorker' in navigator) {
     if(tgt) tgt.scrollIntoView({block:'start', behavior:'instant'});
   }
 
-  let lastTap=0, tapTimer=null;
-  lbStack.addEventListener('click', ()=>{
-    const now=Date.now();
-    if(now-lastTap<300){ lbZoom = (lbZoom===1? 2.2 : 1); lbUpdateZoom(); lastTap=0; clearTimeout(tapTimer); tapTimer=null; }
-    else { lastTap=now; tapTimer=setTimeout(()=>{tapTimer=null;},320); }
+  /* ---------- CouchDB Sync (Save/Test/Sync + AUTO) ---------- */
+  const couchCfgKey = 'couchCfg-techstudy';
+  const couchMsg = () => document.getElementById('couchMsg');
+
+  const couch = {
+    cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
+    save(){ localStorage.setItem(couchCfgKey, JSON.stringify(this.cfg)); },
+    authHeader(){
+      if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
+      return null;
+    },
+    base(){
+      if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
+      return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
+    },
+    // Only check DB exists (no create)
+    async ensureDb(){
+      const ah = this.authHeader();
+      const r = await fetch(this.base(), {
+        method: 'GET',
+        headers: ah ? { Authorization: ah } : {},
+        credentials: 'include'
+      });
+      if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
+      if (!r.ok) throw new Error(await r.text());
+      return r.json().catch(()=>null);
+    },
+    async fetchJson(path, opts = {}){
+      const ah = this.authHeader();
+      const headers = Object.assign(
+        { 'Accept': 'application/json' },
+        opts.headers || {},
+        ah ? { 'Authorization': ah } : {}
+      );
+      const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
+      if (!res.ok) {
+        const text = await res.text();
+        if (res.status===401) throw new Error('Unauthorized: check credentials or DB permissions.');
+        if (res.status===403) throw new Error('Forbidden: user cannot access this DB.');
+        throw new Error(text);
+      }
+      return res.json();
+    },
+    async head(path){
+      const ah = this.authHeader();
+      return fetch(this.base() + path, {
+        method: 'HEAD',
+        headers: ah ? { 'Authorization': ah } : {},
+        credentials: 'include'
+      });
+    },
+    async get(path){
+      const ah = this.authHeader();
+      return fetch(this.base() + path, {
+        method: 'GET',
+        headers: ah ? { 'Authorization': ah } : {},
+        credentials: 'include'
+      });
+    }
+  };
+
+  // Prefill on first run (URL/DB only – no password)
+  if (!couch.cfg.url && !couch.cfg.db) {
+    couch.cfg = { url: 'https://couch.techstudy.me', db: 'techstudy', user: '' };
+    couch.save();
+  }
+
+  function hydrateCouchForm(){
+    const {url='', db='', user=''} = couch.cfg;
+    document.getElementById('couchUrl').value = url || '';
+    document.getElementById('couchDb').value  = db  || '';
+    document.getElementById('couchUser').value= user|| '';
+    document.getElementById('couchPass').value= '';
+  }
+  hydrateCouchForm();
+
+  document.getElementById('couchSave').addEventListener('click', ()=>{
+    couch.cfg.url  = document.getElementById('couchUrl').value.trim();
+    couch.cfg.db   = document.getElementById('couchDb').value.trim();
+    couch.cfg.user = document.getElementById('couchUser').value.trim();
+    const pw       = document.getElementById('couchPass').value;
+    if (pw) couch.cfg.pass = pw; // keep existing if blank
+    couch.save();
+    couchMsg().textContent = 'Saved Couch settings.';
+    maybeStartAutoSync();
   });
-  lbStack.addEventListener('gesturestart', e=>{ e.preventDefault(); });
-  lbStack.addEventListener('gesturechange', e=>{ e.preventDefault(); lbZoom=Math.min(6,Math.max(1,e.scale)); lbUpdateZoom(); });
-  lbStack.addEventListener('gestureend', e=>{ e.preventDefault(); });
+
+  document.getElementById('couchTest').addEventListener('click', async ()=>{
+    try{
+      const info = await couch.ensureDb();            // GET /{db}
+      const dbInfo = info || await couch.fetchJson(''); // fallback GET info
+      couchMsg().textContent = `OK: ${dbInfo.db_name} (doc count ${dbInfo.doc_count})`;
+    }catch(err){ couchMsg().textContent = 'Test failed: ' + err.message; }
+  });
+
+  async function getRevViaHeadOrGet(id){
+    let rev = null;
+    const probe = await couch.head('/' + encodeURIComponent(id));
+    if (probe.ok) rev = probe.headers.get('ETag')?.replaceAll('"','') || null;
+    if (!rev && probe.status===404) return null;
+    if (!rev) {
+      const g = await couch.get('/' + encodeURIComponent(id));
+      if (g.ok) {
+        const j = await g.json().catch(()=>null);
+        rev = j && j._rev ? j._rev : null;
+      }
+    }
+    return rev;
+  }
+
+  async function upsertDoc(id, body){
+    let rev = getRev(id) || await getRevViaHeadOrGet(id);
+    const payload = Object.assign({ _id: id }, rev ? { _rev: rev } : {}, body);
+    try{
+      const res = await couch.fetchJson('/' + encodeURIComponent(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      setRev(id, res.rev);
+      return res.rev;
+    }catch(e){
+      if (String(e).includes('conflict')){
+        const latest = await getRevViaHeadOrGet(id);
+        const pay2 = Object.assign({ _id:id }, latest?{_rev:latest}:{}, body);
+        const res2 = await couch.fetchJson('/' + encodeURIComponent(id), {
+          method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(pay2)
+        });
+        setRev(id, res2.rev);
+        return res2.rev;
+      }
+      throw e;
+    }
+  }
+  async function putAttachment(docId, name, blob, rev){
+    const ah = couch.authHeader();
+    const res = await fetch(
+      couch.base() + '/' + encodeURIComponent(docId) + '/' + encodeURIComponent(name) + '?rev=' + encodeURIComponent(rev),
+      { method:'PUT', body: blob, headers: Object.assign({ 'Content-Type': blob.type||'application/octet-stream' }, ah?{Authorization:ah}:{}) , credentials:'include' }
+    );
+    if(!res.ok) throw new Error(await res.text());
+    const j = await res.json();
+    setRev(docId, j.rev);
+    return j.rev;
+  }
+
+  async function syncAllToCouch(){
+    try{
+      couchMsg().textContent = 'Syncing…';
+      await couch.ensureDb();
+
+      for (const s of driver.select(`select id,name,created_at from subjects`)){
+        await upsertDoc(`subject:${s.id}`, {type:'subject', ...s});
+      }
+      for (const t of driver.select(`select id,subject_id,name,created_at from topics`)){
+        await upsertDoc(`topic:${t.id}`, {type:'topic', ...t});
+      }
+      for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)){
+        await upsertDoc(`chunk:${c.id}`, {type:'chunk', ...c});
+      }
+      for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)){
+        const docId = `note:${n.id}`;
+        let rev = await upsertDoc(docId, {type:'note', ...n});
+        if (n.kind === 'image'){
+          const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [n.id]);
+          for (const p of pages){
+            const blob = await readFile(p.path).catch(()=>null);
+            if(!blob) continue;
+            const ext = (blob.type && blob.type.includes('/') ? blob.type.split('/')[1] : 'bin');
+            rev = await putAttachment(docId, `p${p.page}.${ext}`, blob, rev);
+          }
+        }
+      }
+      const info = await couch.fetchJson('');
+      couchMsg().textContent = `Sync done. Docs: ${info.doc_count}`;
+    }catch(err){
+      couchMsg().textContent = 'Sync failed: ' + err.message;
+    }
+  }
+  document.getElementById('couchSync').addEventListener('click', ()=>syncAllToCouch());
+  document.getElementById('couchPull').addEventListener('click', ()=>pullOnce(true));
+
+  /* ---------- AUTO PUSH LOOP ---------- */
+  let pushTimer=null, pushing=false;
+  async function pushOnce(){
+    if(pushing) return; pushing=true;
+    try{
+      await couch.ensureDb();
+      const rows = driver.select(`select id,doc_id,doc_type,action,payload from sync_outbox order by id asc limit 25`);
+      for(const r of rows){
+        try{
+          if(r.action==='delete'){
+            let rev = getRev(r.doc_id) || await getRevViaHeadOrGet(r.doc_id);
+            if(!rev) { driver.exec(`delete from sync_outbox where id=?`, [r.id]); continue; }
+            const j = await couch.fetchJson('/'+encodeURIComponent(r.doc_id)+'?rev='+encodeURIComponent(rev), { method:'DELETE' });
+            setRev(r.doc_id, j.rev);
+          }else{
+            const body = r.payload ? JSON.parse(r.payload) : {};
+            let rev = await upsertDoc(r.doc_id, {type:r.doc_type, ...body});
+            if(r.doc_type==='note' && body.kind==='image'){
+              const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [body.id]);
+              for(const p of pages){
+                const blob = await readFile(p.path).catch(()=>null);
+                if(!blob) continue;
+                const ext = (blob.type && blob.type.includes('/') ? blob.type.split('/')[1] : 'bin');
+                rev = await putAttachment(r.doc_id, `p${p.page}.${ext}`, blob, rev);
+              }
+            }
+          }
+          driver.exec(`delete from sync_outbox where id=?`, [r.id]);
+        }catch(errRow){
+          console.warn('push row failed', errRow);
+          break;
+        }
+      }
+    }catch(e){ /* network/auth issue; will retry */ }
+    finally{ pushing=false; }
+  }
+  function startPushLoop(){
+    if(pushTimer) return;
+    pushTimer = setInterval(pushOnce, 2000);
+    window.addEventListener('online', pushOnce);
+  }
+
+  /* ---------- AUTO PULL LOOP ---------- */
+  let pulling=false;
+  async function fetchAttachment(docId, name){
+    const ah = couch.authHeader();
+    const res = await fetch(couch.base()+'/'+encodeURIComponent(docId)+'/'+encodeURIComponent(name),
+      { credentials:'include', headers: ah?{Authorization:ah}:{}} );
+    if(!res.ok) return null;
+    return await res.blob();
+  }
+  async function applyRemoteDoc(doc){
+    if(doc._deleted){
+      const id = doc._id;
+      const [type, nid] = id.split(':');
+      if(type==='subject') driver.exec(`delete from subjects where id=?`, [Number(nid)]);
+      if(type==='topic')   driver.exec(`delete from topics where id=?`, [Number(nid)]);
+      if(type==='chunk')   driver.exec(`delete from chunks where id=?`, [Number(nid)]);
+      if(type==='note'){ await deleteImageNoteCascade(Number(nid)); }
+      setRev(id, doc._rev);
+      return;
+    }
+    const t = doc.type;
+    if(t==='subject'){
+      driver.exec(`insert into subjects(id,name,created_at) values(?,?,?)
+                   on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
+        [doc.id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+    }else if(t==='topic'){
+      driver.exec(`insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
+                   on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
+        [doc.id, doc.subject_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+    }else if(t==='chunk'){
+      driver.exec(`insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
+                   on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
+        [doc.id, doc.topic_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+    }else if(t==='note'){
+      driver.exec(`insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
+                   values(?,?,?,?,?,?,?,?)
+                   on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
+                     title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
+        [doc.id, doc.scope, doc.scope_id, doc.kind, doc.title||'', doc.path||'', doc.url||'', doc.created_at||Math.floor(Date.now()/1000)]);
+      if(doc._attachments){
+        for(const name of Object.keys(doc._attachments)){
+          const blob = await fetchAttachment(doc._id, name);
+          if(!blob) continue;
+          const page = Number(name.replace(/^p(\d+)\..+$/,'$1')) || 1;
+          const path = `/images/n${doc.id}/${name}`;
+          await writeBlob(path, blob);
+          driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)
+                       on conflict(note_id,page) do update set path=excluded.path`, [doc.id, page, path]);
+        }
+      }
+    }
+    setRev(doc._id, doc._rev);
+  }
+
+  async function pullOnce(manual=false){
+    try{
+      await couch.ensureDb();
+      const since = getSince();
+      const url = couch.base()+`/_changes?since=${encodeURIComponent(since)}&include_docs=true&attachments=false&att_encoding_info=true&feed=longpoll&timeout=${manual?0:60000}`;
+      const headers = couch.authHeader()?{Authorization:couch.authHeader()}:{};
+      const res = await fetch(url, { credentials:'include', headers });
+      if(!res.ok){ if(manual) throw new Error(await res.text()); return; }
+      const j = await res.json();
+      for(const ch of j.results){ if(ch.doc) await applyRemoteDoc(ch.doc); }
+      setSince(j.last_seq);
+      if(manual) couchMsg().textContent = 'Pulled changes.';
+      loadTree();
+      if(details.scope) setDetail(details.scope, details.id, details.titleEl.textContent);
+    }catch(err){
+      if(manual) couchMsg().textContent = 'Pull failed: ' + err.message;
+    }
+  }
+  async function pullLoop(){
+    if(pulling) return; pulling = true;
+    while(true){
+      await pullOnce(false);
+      await new Promise(r=>setTimeout(r, 800));
+    }
+  }
+  function maybeStartAutoSync(){
+    if(couch.cfg?.url && couch.cfg?.db){
+      startPushLoop();
+      pullLoop();
+      couchMsg().textContent = (couchMsg().textContent||'') + '  Auto-sync running.';
+    }
+  }
 
   /* init */
-  setStatus('DB: OK (IndexedDB — techstudy)');
+  setStatus('DB: OK (IndexedDB)');
   loadTree();
+  maybeStartAutoSync();
 })();
 </script>
 </body>
