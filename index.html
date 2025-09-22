@@ -73,9 +73,9 @@ a.link{color:#8fb5ff;text-decoration:none}
         <header><h2 style="margin:0">CouchDB Sync</h2></header>
         <div class="row">
           <input id="couchUrl" type="url" placeholder="https://couch.techstudy.me"/>
-          <input id="couchDb" type="text" placeholder="db name (techstudy)"/>
+          <input id="couchDb" type="text" placeholder="db name (engineering)"/>
         </div>
-        <!-- Hidden creds (DB can be open). Remove style to show again. -->
+        <!-- Hidden creds (DB is open). Remove style to show again. -->
         <div class="row" id="credsRow" style="display:none">
           <input id="couchUser" type="text" placeholder="user"/>
           <input id="couchPass" type="password" placeholder="password"/>
@@ -145,9 +145,9 @@ if ('serviceWorker' in navigator) {
 
 <script type="module">
 (async () => {
+  /* ---------- Status + utils ---------- */
   const statusEl = document.getElementById('dbStatus');
   const netTag = document.getElementById('netTag');
-  const SQLJS_BASE = './lib/sqljs/';
   const setStatus = (t, ok=true) => {
     statusEl.textContent = t;
     statusEl.style.borderColor = ok ? 'var(--line)' : 'var(--bad)';
@@ -157,6 +157,7 @@ if ('serviceWorker' in navigator) {
   setNet(); window.addEventListener('online', setNet); window.addEventListener('offline', setNet);
   const esc = s => (s??'').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
 
+  /* ---------- Robust sql.js loader (local → CDN fallback) ---------- */
   function loadScript(url){
     return new Promise((resolve,reject)=>{
       const s=document.createElement('script'); s.src=url; s.async=true;
@@ -164,21 +165,45 @@ if ('serviceWorker' in navigator) {
       document.head.appendChild(s);
     });
   }
+  const SQL_CANDIDATES = [
+    { js: './lib/sqljs/sql-wasm.js', wasm: './lib/sqljs/sql-wasm.wasm' },
+    { js: 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js',
+      wasm: 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.wasm' }
+  ];
+  let SQL = null;
+  for (const src of SQL_CANDIDATES) {
+    try {
+      await loadScript(src.js);
+      SQL = await window.initSqlJs({ locateFile: () => src.wasm });
+      break;
+    } catch (err) {
+      console.warn('sql.js load failed from', src.js, err);
+    }
+  }
+  if (!SQL) { setStatus('DB init failed: could not load sql.js', false); throw new Error('sql.js not available'); }
 
-  /* ---------- IndexedDB (namespaced for TechStudy) ---------- */
+  /* ---------- IndexedDB (TechStudy namespace) ---------- */
   const IDB_NAME = 'study-notes-idb-techstudy';
   const STORE_SQLITE = 'sqlite';
   const STORE_IMAGES = 'images';
-  const idb = await new Promise((resolve,reject)=>{
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db=req.result;
-      if(!db.objectStoreNames.contains(STORE_SQLITE)) db.createObjectStore(STORE_SQLITE);
-      if(!db.objectStoreNames.contains(STORE_IMAGES)) db.createObjectStore(STORE_IMAGES);
-    };
-    req.onsuccess = ()=>resolve(req.result);
-    req.onerror = ()=>reject(req.error);
-  });
+
+  let idb;
+  try {
+    idb = await new Promise((resolve,reject)=>{
+      if (!('indexedDB' in window)) return reject(new Error('IndexedDB not supported (Private mode?)'));
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db=req.result;
+        if(!db.objectStoreNames.contains(STORE_SQLITE)) db.createObjectStore(STORE_SQLITE);
+        if(!db.objectStoreNames.contains(STORE_IMAGES)) db.createObjectStore(STORE_IMAGES);
+      };
+      req.onsuccess = ()=>resolve(req.result);
+      req.onerror   = ()=>reject(req.error || new Error('IndexedDB open failed'));
+    });
+  } catch (e) {
+    setStatus('IndexedDB error: ' + (e?.message || e), false);
+    throw e;
+  }
   const idbGet = (store,key)=> new Promise((res,rej)=>{
     const tx=idb.transaction(store,'readonly').objectStore(store).get(key);
     tx.onsuccess=()=>res(tx.result); tx.onerror=()=>rej(tx.error);
@@ -192,9 +217,7 @@ if ('serviceWorker' in navigator) {
     tx.onsuccess=()=>res(); tx.onerror=()=>rej(tx.error);
   });
 
-  /* ---------- sql.js ---------- */
-  await loadScript(SQLJS_BASE + 'sql-wasm.js');
-  const SQL = await window.initSqlJs({ locateFile: f => SQLJS_BASE + f });
+  /* ---------- Open / create SQLite DB ---------- */
   const raw = await idbGet(STORE_SQLITE, 'main');
   const db = raw ? new SQL.Database(raw instanceof Uint8Array ? raw : new Uint8Array(raw)) : new SQL.Database();
 
@@ -551,7 +574,7 @@ if ('serviceWorker' in navigator) {
     for(const f of [...e.target.files]){
       const ext=(f.name.split('.').pop()||'png').toLowerCase();
       const id = crypto.randomUUID();
-      const previewPath=`/images/${details.scope}/${details.id}/${id.${'ext'}}`.replace('${\'ext\'}', ext); // safe template
+      const previewPath=`/images/${details.scope}/${details.id}/${id}.${ext}`;
       await writeBlob(previewPath,f);
       driver.exec(`insert into notes(scope,scope_id,kind,title,path) values(?,?,?,?,?)`,
         [details.scope,details.id,'image',f.name,previewPath]);
@@ -626,6 +649,19 @@ if ('serviceWorker' in navigator) {
     }
   }
 
+  imageList.addEventListener('change', async (e)=>{
+    const fi = e.target.closest('input[type=file][data-act="add-pages"]');
+    if(!fi) return;
+    const noteId = Number(fi.dataset.id);
+    let next = driver.select(`select coalesce(max(page),0)+1 as n from image_pages where note_id=?`, [noteId])[0].n;
+    for(const f of [...fi.files]){
+      const ext=(f.name.split('.').pop()||'png').toLowerCase();
+      const id=crypto.randomUUID();
+      const path=`/images/n${noteId}/${id.${'ext'}}`;
+    }
+  });
+
+  // Fix the small template bug above; re-add correctly:
   imageList.addEventListener('change', async (e)=>{
     const fi = e.target.closest('input[type=file][data-act="add-pages"]');
     if(!fi) return;
@@ -737,7 +773,6 @@ if ('serviceWorker' in navigator) {
       if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
       return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
     },
-    // Only check DB exists (no create)
     async ensureDb(){
       const ah = this.authHeader();
       const r = await fetch(this.base(), {
@@ -785,7 +820,7 @@ if ('serviceWorker' in navigator) {
 
   // Prefill on first run (URL/DB only – no password)
   if (!couch.cfg.url && !couch.cfg.db) {
-    couch.cfg = { url: 'https://couch.techstudy.me', db: 'techstudy', user: '' };
+    couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
     couch.save();
   }
 
@@ -811,8 +846,8 @@ if ('serviceWorker' in navigator) {
 
   document.getElementById('couchTest').addEventListener('click', async ()=>{
     try{
-      const info = await couch.ensureDb();            // GET /{db}
-      const dbInfo = info || await couch.fetchJson(''); // fallback GET info
+      const info = await couch.ensureDb();
+      const dbInfo = info || await couch.fetchJson('');
       couchMsg().textContent = `OK: ${dbInfo.db_name} (doc count ${dbInfo.doc_count})`;
     }catch(err){ couchMsg().textContent = 'Test failed: ' + err.message; }
   });
