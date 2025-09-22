@@ -649,19 +649,7 @@ if ('serviceWorker' in navigator) {
     }
   }
 
-  imageList.addEventListener('change', async (e)=>{
-    const fi = e.target.closest('input[type=file][data-act="add-pages"]');
-    if(!fi) return;
-    const noteId = Number(fi.dataset.id);
-    let next = driver.select(`select coalesce(max(page),0)+1 as n from image_pages where note_id=?`, [noteId])[0].n;
-    for(const f of [...fi.files]){
-      const ext=(f.name.split('.').pop()||'png').toLowerCase();
-      const id=crypto.randomUUID();
-      const path=`/images/n${noteId}/${id.${'ext'}}`;
-    }
-  });
-
-  // Fix the small template bug above; re-add correctly:
+  /* ✅ Single, correct pages uploader (the bad one is removed) */
   imageList.addEventListener('change', async (e)=>{
     const fi = e.target.closest('input[type=file][data-act="add-pages"]');
     if(!fi) return;
