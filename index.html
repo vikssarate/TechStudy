@@ -160,12 +160,13 @@ a.link{color:#8fb5ff;text-decoration:none}
 </div>
 
 <script>
-/* Register the TechStudy SW */
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.techstudy.js', { scope: './' }).catch(()=>{});
+  navigator.serviceWorker.register('/sw.techstudy.js', { scope: '/' })
+    .then(r => navigator.serviceWorker.ready)
+    .then(() => console.log('SW ready:', navigator.serviceWorker.controller?.scriptURL))
+    .catch(()=>{});
 }
 </script>
-
 <script type="module">
 (async () => {
   /* ---------- Status + utils ---------- */
