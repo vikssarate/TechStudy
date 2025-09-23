@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="color-scheme" content="dark light"/>
 <title>TechStudy — Subjects → Topics → Chunks — Notes (SQLite + IndexedDB)</title>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <style>
@@ -19,6 +20,7 @@ h1{font-size:18px;margin:0 0 12px}
 input[type=text],input[type=url],input[type=password]{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#0b1020;color:var(--ink)}
 button{padding:10px 14px;border:0;border-radius:14px;background:var(--accent);color:#081225;font-weight:600;cursor:pointer}
 button.ghost{background:#232a48;color:var(--ink)} button.warn{background:var(--bad);color:#200} button.slim{padding:6px 10px;border-radius:10px}
+button:focus-visible, .chunk-pill:focus-visible, h3[data-act]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 hr{border:0;border-top:1px dashed var(--line);margin:12px 0}
 .subject{border:1px dashed var(--line);border-radius:12px;padding:12px;margin:10px 0}
 .subject>header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
@@ -68,28 +70,28 @@ a.link{color:#8fb5ff;text-decoration:none}
 <div class="wrap">
   <h1>
     TechStudy — Subjects → Topics → Chunks — Notes (SQLite + IndexedDB)
-    <span id="dbStatus" class="tag">DB: starting…</span>
-    <span id="netTag" class="tag">Online</span>
+    <span id="dbStatus" class="tag" role="status" aria-live="polite">DB: starting…</span>
+    <span id="netTag" class="tag" role="status" aria-live="polite">Online</span>
   </h1>
 
   <div class="app">
     <div class="panel" id="tree">
       <div class="row">
-        <input id="newSubject" type="text" placeholder="New subject name"/>
+        <input id="newSubject" type="text" placeholder="New subject name" aria-label="New subject name"/>
         <button id="addSubject">+ Subject</button>
       </div>
 
       <!-- CouchDB panel -->
-      <div class="subject">
-        <header><h2 style="margin:0">CouchDB Sync</h2></header>
+      <div class="subject" aria-labelledby="couchHdr">
+        <header><h2 id="couchHdr" style="margin:0">CouchDB Sync</h2></header>
         <div class="row">
-          <input id="couchUrl" type="url" placeholder="https://couch.techstudy.me"/>
-          <input id="couchDb" type="text" placeholder="db name (engineering)"/>
+          <input id="couchUrl" type="url" placeholder="https://couch.techstudy.me" aria-label="CouchDB URL"/>
+          <input id="couchDb" type="text" placeholder="db name (engineering)" aria-label="CouchDB database name"/>
         </div>
         <!-- Hidden creds (DB is open). Remove style to show again. -->
         <div class="row" id="credsRow" style="display:none">
-          <input id="couchUser" type="text" placeholder="user"/>
-          <input id="couchPass" type="password" placeholder="password"/>
+          <input id="couchUser" type="text" placeholder="user" aria-label="Username"/>
+          <input id="couchPass" type="password" placeholder="password" aria-label="Password"/>
         </div>
         <div class="row">
           <button class="ghost slim" id="couchSave">Save</button>
@@ -97,14 +99,14 @@ a.link{color:#8fb5ff;text-decoration:none}
           <button id="couchSync">Sync now</button>
           <button class="ghost slim" id="couchPull">Pull now</button>
         </div>
-        <div class="small" id="couchMsg"></div>
+        <div class="small" id="couchMsg" role="status" aria-live="polite"></div>
       </div>
       <!-- /CouchDB panel -->
 
       <div id="subjects"></div>
     </div>
 
-    <div class="panel details">
+    <div class="panel details" aria-live="polite">
       <header>
         <div>
           <div class="tag" id="scopeTag">Nothing selected</div>
@@ -130,8 +132,8 @@ a.link{color:#8fb5ff;text-decoration:none}
         <div class="section">
           <h3>PDF links</h3>
           <div class="row">
-            <input id="pdfTitle" type="text" placeholder="PDF title (e.g., Syllabus page)"/>
-            <input id="pdfUrl" type="url" placeholder="https://...pdf or Google Drive link/ID"/>
+            <input id="pdfTitle" type="text" placeholder="PDF title (e.g., Syllabus page)" aria-label="PDF title"/>
+            <input id="pdfUrl" type="url" placeholder="https://...pdf or Google Drive link/ID" aria-label="PDF URL or Drive ID"/>
             <button id="addPdf">+ Link</button>
           </div>
           <div id="pdfList"></div>
@@ -141,14 +143,14 @@ a.link{color:#8fb5ff;text-decoration:none}
   </div>
 </div>
 
-<!-- Image Lightbox (unchanged) -->
-<div id="lightbox" class="lightbox" aria-hidden="true">
+<!-- Image Lightbox -->
+<div id="lightbox" class="lightbox" aria-hidden="true" aria-label="Image viewer">
   <button class="lightbox-close" aria-label="Close">×</button>
   <div class="viewport"><div class="stack" id="lbStack"></div></div>
 </div>
 
-<!-- NEW: PDF Viewer Modal -->
-<div id="pdfModal" aria-hidden="true">
+<!-- PDF Viewer Modal -->
+<div id="pdfModal" aria-hidden="true" aria-label="PDF viewer">
   <div id="pdfBox">
     <div id="pdfHdr">
       <button id="pdfClose" class="ghost slim">Close</button>
@@ -180,6 +182,12 @@ if ('serviceWorker' in navigator) {
   const setNet = () => netTag.textContent = navigator.onLine ? 'Online' : 'Offline';
   setNet(); window.addEventListener('online', setNet); window.addEventListener('offline', setNet);
   const esc = s => (s??'').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
+  const clickViaKeys = (ev, pred) => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      const t = pred(ev.target);
+      if (t) { ev.preventDefault(); t.click(); }
+    }
+  };
 
   /* ---------- Robust sql.js loader (local → CDN fallback) ---------- */
   function loadScript(url){
@@ -305,6 +313,7 @@ if ('serviceWorker' in navigator) {
   let saveTimer;
   const saveDB = async ()=>{ await idbSet(STORE_SQLITE,'main',db.export()); setStatus('Saved ✓'); };
   const scheduleSave = ()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(saveDB,250); };
+  window.addEventListener('beforeunload', ()=>{ try { db && idb && saveDB(); } catch(_){} });
 
   const driver = {
     exec(sql, bind){
@@ -400,7 +409,7 @@ if ('serviceWorker' in navigator) {
       el.innerHTML=`
         <header>
           <div class="row">
-            <button class="iconbtn slim" data-act="toggle-subj" data-id="${s.id}"><span class="icon">${caret}</span></button>
+            <button class="iconbtn slim" data-act="toggle-subj" data-id="${s.id}" aria-expanded="${!collapsedSubj}" aria-controls="subject-body-${s.id}"><span class="icon">${caret}</span></button>
             <h2>${esc(s.name)}</h2>
           </div>
           <div class="row">
@@ -410,7 +419,7 @@ if ('serviceWorker' in navigator) {
         </header>
         <div class="subject-body" id="subject-body-${s.id}">
           <div class="row">
-            <input id="topic-input-${s.id}" type="text" placeholder="New topic name"/>
+            <input id="topic-input-${s.id}" type="text" placeholder="New topic name" aria-label="New topic name"/>
             <button class="slim" data-act="add-topic" data-id="${s.id}">+ Topic</button>
           </div>
           <div id="topic-list-${s.id}"></div>
@@ -431,8 +440,8 @@ if ('serviceWorker' in navigator) {
         <div class="topic ${collapsedTopic?'collapsed':''}" data-tid="${t.id}">
           <header>
             <div class="row">
-              <button class="iconbtn slim" data-act="toggle-topic" data-id="${t.id}"><span class="icon">${caret}</span></button>
-              <h3 data-act="open-topic" data-id="${t.id}">${esc(t.name)} <span class="small">(${t.chunks} chunks)</span></h3>
+              <button class="iconbtn slim" data-act="toggle-topic" data-id="${t.id}" aria-expanded="${!collapsedTopic}" aria-controls="chunk-list-${t.id}"><span class="icon">${caret}</span></button>
+              <h3 data-act="open-topic" data-id="${t.id}" tabindex="0">${esc(t.name)} <span class="small">(${t.chunks} chunks)</span></h3>
             </div>
             <div class="row">
               <button class="slim" data-act="add-chunk" data-id="${t.id}">+ Chunk</button>
@@ -449,13 +458,18 @@ if ('serviceWorker' in navigator) {
     const list = document.getElementById(`chunk-list-${topicId}`); if(!list) return;
     const chunks = driver.select(`select id,name from chunks where topic_id=? order by created_at asc`, [topicId]);
     list.innerHTML = chunks.map(c=>`
-      <span class="chunk-pill" data-act="open-chunk" data-id="${c.id}">${esc(c.name)}</span>
+      <span class="chunk-pill" data-act="open-chunk" data-id="${c.id}" role="button" tabindex="0" aria-label="Open chunk ${esc(c.name)}">${esc(c.name)}</span>
       <button class="ghost slim" data-act="rename-chunk" data-id="${c.id}">Rename</button>
       <button class="warn slim" data-act="del-chunk" data-id="${c.id}">Delete</button>
     `).join('');
   }
 
   /* ---------- left pane actions + QUEUE ---------- */
+  subjectsEl.addEventListener('keydown', (e)=>{
+    // keyboard "click" for focusable headings/pills
+    clickViaKeys(e, t => t.closest('[data-act]') || (t.classList.contains('chunk-pill') ? t : null));
+  });
+
   subjectsEl.addEventListener('click', async (e)=>{
     const el = e.target.closest('button, h3, .chunk-pill'); if(!el) return;
     const act = el.dataset.act, id = Number(el.dataset.id);
@@ -464,111 +478,114 @@ if ('serviceWorker' in navigator) {
         const card = el.closest('.subject'); const sid = Number(id);
         const collapsedNow = card.classList.toggle('collapsed');
         el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
+        el.setAttribute('aria-expanded', String(!collapsedNow));
         if(collapsedNow) collapsed.subjects.add(sid); else collapsed.subjects.delete(sid);
         saveCollapse();
 
       } else if(act==='toggle-topic'){
-        const card = el.closest('.topic'); const tid =      Number(id);
-      const collapsedNow = card.classList.toggle('collapsed');
-      el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
-      if (collapsedNow) collapsed.topics.add(tid); else collapsed.topics.delete(tid);
-      saveCollapse();
+        const card = el.closest('.topic'); const tid = Number(id);
+        const collapsedNow = card.classList.toggle('collapsed');
+        el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
+        el.setAttribute('aria-expanded', String(!collapsedNow));
+        if (collapsedNow) collapsed.topics.add(tid); else collapsed.topics.delete(tid);
+        saveCollapse();
 
-    } else if (act === 'add-topic') {
-      const sid = id;
-      const inp = document.getElementById(`topic-input-${sid}`);
-      const name = (inp.value || '').trim(); if (!name) return;
-      driver.exec(`insert into topics(subject_id,name) values(?,?)`, [sid, name]);
-      const tid = driver.select(`select last_insert_rowid() as id`)[0].id;
-      queue(`topic:${tid}`, 'topic', 'upsert', { id: tid, subject_id: sid, name, created_at: Math.floor(Date.now()/1000) });
-      await renderTopics(sid);
+      } else if (act === 'add-topic') {
+        const sid = id;
+        const inp = document.getElementById(`topic-input-${sid}`);
+        const name = (inp.value || '').trim(); if (!name) return;
+        driver.exec(`insert into topics(subject_id,name) values(?,?)`, [sid, name]);
+        const tid = driver.select(`select last_insert_rowid() as id`)[0].id;
+        queue(`topic:${tid}`, 'topic', 'upsert', { id: tid, subject_id: sid, name, created_at: Math.floor(Date.now()/1000) });
+        inp.value = '';
+        await renderTopics(sid);
 
-    } else if (act === 'rename-subj') {
-      const [r] = driver.select(`select name from subjects where id=?`, [id]);
-      const name = prompt('Rename subject', r?.name || ''); if (!name) return;
-      driver.exec(`update subjects set name=? where id=?`, [name, id]);
-      queue(`subject:${id}`, 'subject', 'upsert', { id, name, created_at: Math.floor(Date.now()/1000) });
-      await loadTree();
+      } else if (act === 'rename-subj') {
+        const [r] = driver.select(`select name from subjects where id=?`, [id]);
+        const name = prompt('Rename subject', r?.name || ''); if (!name) return;
+        driver.exec(`update subjects set name=? where id=?`, [name, id]);
+        queue(`subject:${id}`, 'subject', 'upsert', { id, name, created_at: Math.floor(Date.now()/1000) });
+        await loadTree();
 
-    } else if (act === 'del-subj') {
-      if (!confirm('Delete subject and everything under it?')) return;
-      const topicIds = driver.select(`select id from topics where subject_id=?`, [id]).map(x => x.id);
-      const chunkIds = driver.select(`select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?`, [id]).map(x => x.id);
-      const noteIds  = driver.select(`
-        select n.id from notes n
-        where (n.scope='topic' and n.scope_id in (select id from topics where subject_id=?))
-           or (n.scope='chunk' and n.scope_id in (select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?))
-      `, [id, id]).map(x => x.id);
-      for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-      for (const cid of chunkIds) queue(`chunk:${cid}`, 'chunk', 'delete', null);
-      for (const tid of topicIds) queue(`topic:${tid}`, 'topic', 'delete', null);
-      queue(`subject:${id}`, 'subject', 'delete', null);
-      for (const nid of noteIds) await deleteImageNoteCascade(nid);
-      driver.exec(`delete from subjects where id=?`, [id]);
-      collapsed.subjects.delete(id); saveCollapse();
-      await loadTree(); setDetail(null, null, '');
+      } else if (act === 'del-subj') {
+        if (!confirm('Delete subject and everything under it?')) return;
+        const topicIds = driver.select(`select id from topics where subject_id=?`, [id]).map(x => x.id);
+        const chunkIds = driver.select(`select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?`, [id]).map(x => x.id);
+        const noteIds  = driver.select(`
+          select n.id from notes n
+          where (n.scope='topic' and n.scope_id in (select id from topics where subject_id=?))
+             or (n.scope='chunk' and n.scope_id in (select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?))
+        `, [id, id]).map(x => x.id);
+        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
+        for (const cid of chunkIds) queue(`chunk:${cid}`, 'chunk', 'delete', null);
+        for (const tid of topicIds) queue(`topic:${tid}`, 'topic', 'delete', null);
+        queue(`subject:${id}`, 'subject', 'delete', null);
+        for (const nid of noteIds) await deleteImageNoteCascade(nid);
+        driver.exec(`delete from subjects where id=?`, [id]);
+        collapsed.subjects.delete(id); saveCollapse();
+        await loadTree(); setDetail(null, null, '');
 
-    } else if (act === 'rename-topic') {
-      const [r] = driver.select(`select name,subject_id from topics where id=?`, [id]);
-      const name = prompt('Rename topic', r?.name || ''); if (!name) return;
-      driver.exec(`update topics set name=? where id=?`, [name, id]);
-      queue(`topic:${id}`, 'topic', 'upsert', { id, subject_id: r.subject_id, name, created_at: Math.floor(Date.now()/1000) });
-      await renderTopics(r.subject_id);
-      if (details.scope === 'topic' && details.id === id) setDetail('topic', id, name);
+      } else if (act === 'rename-topic') {
+        const [r] = driver.select(`select name,subject_id from topics where id=?`, [id]);
+        const name = prompt('Rename topic', r?.name || ''); if (!name) return;
+        driver.exec(`update topics set name=? where id=?`, [name, id]);
+        queue(`topic:${id}`, 'topic', 'upsert', { id, subject_id: r.subject_id, name, created_at: Math.floor(Date.now()/1000) });
+        await renderTopics(r.subject_id);
+        if (details.scope === 'topic' && details.id === id) setDetail('topic', id, name);
 
-    } else if (act === 'del-topic') {
-      if (!confirm('Delete topic, its chunks & notes?')) return;
-      const [r] = driver.select(`select subject_id from topics where id=?`, [id]);
-      const chunkIds = driver.select(`select id from chunks where topic_id=?`, [id]).map(x => x.id);
-      const noteIds  = driver.select(`
-        select n.id from notes n
-        where (n.scope='topic' and n.scope_id=?)
-           or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
-      `, [id, id]).map(x => x.id);
-      for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-      for (const cid of chunkIds) queue(`chunk:${cid}`, 'chunk', 'delete', null);
-      queue(`topic:${id}`, 'topic', 'delete', null);
-      for (const nid of noteIds) await deleteImageNoteCascade(nid);
-      driver.exec(`delete from topics where id=?`, [id]);
-      collapsed.topics.delete(id); saveCollapse();
-      await loadTree(); setDetail(null, null, '');
+      } else if (act === 'del-topic') {
+        if (!confirm('Delete topic, its chunks & notes?')) return;
+        const [r] = driver.select(`select subject_id from topics where id=?`, [id]);
+        const chunkIds = driver.select(`select id from chunks where topic_id=?`, [id]).map(x => x.id);
+        const noteIds  = driver.select(`
+          select n.id from notes n
+          where (n.scope='topic' and n.scope_id=?)
+             or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
+        `, [id, id]).map(x => x.id);
+        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
+        for (const cid of chunkIds) queue(`chunk:${cid}`, 'chunk', 'delete', null);
+        queue(`topic:${id}`, 'topic', 'delete', null);
+        for (const nid of noteIds) await deleteImageNoteCascade(nid);
+        driver.exec(`delete from topics where id=?`, [id]);
+        collapsed.topics.delete(id); saveCollapse();
+        await loadTree(); setDetail(null, null, '');
 
-    } else if (act === 'add-chunk') {
-      const topicId = id;
-      const name = prompt('New chunk name'); if (!name) return;
-      driver.exec(`insert into chunks(topic_id,name) values(?,?)`, [topicId, name]);
-      const cid = driver.select(`select last_insert_rowid() as id`)[0].id;
-      queue(`chunk:${cid}`, 'chunk', 'upsert', { id: cid, topic_id: topicId, name, created_at: Math.floor(Date.now()/1000) });
-      await renderChunks(topicId);
+      } else if (act === 'add-chunk') {
+        const topicId = id;
+        const name = prompt('New chunk name'); if (!name) return;
+        driver.exec(`insert into chunks(topic_id,name) values(?,?)`, [topicId, name]);
+        const cid = driver.select(`select last_insert_rowid() as id`)[0].id;
+        queue(`chunk:${cid}`, 'chunk', 'upsert', { id: cid, topic_id: topicId, name, created_at: Math.floor(Date.now()/1000) });
+        await renderChunks(topicId);
 
-    } else if (act === 'rename-chunk') {
-      const [r] = driver.select(`select name,topic_id from chunks where id=?`, [id]);
-      const name = prompt('Rename chunk', r?.name || ''); if (!name) return;
-      driver.exec(`update chunks set name=? where id=?`, [name, id]);
-      queue(`chunk:${id}`, 'chunk', 'upsert', { id, topic_id: r.topic_id, name, created_at: Math.floor(Date.now()/1000) });
-      await renderChunks(r.topic_id);
-      if (details.scope === 'chunk' && details.id === id) setDetail('chunk', id, name);
+      } else if (act === 'rename-chunk') {
+        const [r] = driver.select(`select name,topic_id from chunks where id=?`, [id]);
+        const name = prompt('Rename chunk', r?.name || ''); if (!name) return;
+        driver.exec(`update chunks set name=? where id=?`, [name, id]);
+        queue(`chunk:${id}`, 'chunk', 'upsert', { id, topic_id: r.topic_id, name, created_at: Math.floor(Date.now()/1000) });
+        await renderChunks(r.topic_id);
+        if (details.scope === 'chunk' && details.id === id) setDetail('chunk', id, name);
 
-    } else if (act === 'del-chunk') {
-      if (!confirm('Delete this chunk & its notes?')) return;
-      const [r] = driver.select(`select topic_id from chunks where id=?`, [id]);
-      const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [id]).map(x=>x.id);
-      for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-      queue(`chunk:${id}`, 'chunk', 'delete', null);
-      for (const nid of noteIds) await deleteImageNoteCascade(nid);
-      driver.exec(`delete from chunks where id=?`, [id]);
-      await renderChunks(r.topic_id); setDetail(null, null, '');
+      } else if (act === 'del-chunk') {
+        if (!confirm('Delete this chunk & its notes?')) return;
+        const [r] = driver.select(`select topic_id from chunks where id=?`, [id]);
+        const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [id]).map(x=>x.id);
+        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
+        queue(`chunk:${id}`, 'chunk', 'delete', null);
+        for (const nid of noteIds) await deleteImageNoteCascade(nid);
+        driver.exec(`delete from chunks where id=?`, [id]);
+        await renderChunks(r.topic_id); setDetail(null, null, '');
 
-    } else if (act === 'open-topic') {
-      const [r] = driver.select(`select name from topics where id=?`, [id]);
-      setDetail('topic', id, r?.name || 'Topic');
+      } else if (act === 'open-topic') {
+        const [r] = driver.select(`select name from topics where id=?`, [id]);
+        setDetail('topic', id, r?.name || 'Topic');
 
-    } else if (act === 'open-chunk') {
-      const [r] = driver.select(`select name from chunks where id=?`, [id]);
-      setDetail('chunk', id, r?.name || 'Chunk');
-    }
-  } catch (err) { alert(err.message); }
-});
+      } else if (act === 'open-chunk') {
+        const [r] = driver.select(`select name from chunks where id=?`, [id]);
+        setDetail('chunk', id, r?.name || 'Chunk');
+      }
+    } catch (err) { alert(err.message); }
+  });
 
   /* ---------- top bar ---------- */
   const addSubject = () => {
@@ -582,234 +599,314 @@ if ('serviceWorker' in navigator) {
   document.getElementById('addSubject').addEventListener('click', addSubject);
   document.getElementById('newSubject').addEventListener('keydown', e => { if (e.key === 'Enter') addSubject(); });
 
-  /* ---------- detail: notes (existing) ---------- */
-  // (Image handling + PDF list rendering already above)
-
-  /* ---------- Notes UI (images + PDFs) + Lightbox (RESTORED) ---------- */
-
-// helpers already defined earlier: driver, writeBlob, readFile, rmFile, deleteImageNoteCascade, queue
-const imageList = document.getElementById('imageList');
-const pdfList   = document.getElementById('pdfList');
-
-/* Add PDF link */
-document.getElementById('addPdf').addEventListener('click', ()=>{
-  if (!details.scope) return;
-  const title = (document.getElementById('pdfTitle').value || '').trim() || 'PDF';
-  const url   = (document.getElementById('pdfUrl').value || '').trim();
-  if (!url) return alert('Add a valid URL');
-  driver.exec(`insert into notes(scope,scope_id,kind,title,url) values(?,?,?,?,?)`,
-    [details.scope, details.id, 'pdf', title, url]);
-  const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
-  queue(`note:${nid}`, 'note', 'upsert', {
-    id:nid, scope:details.scope, scope_id:details.id,
-    kind:'pdf', title, url, created_at:Math.floor(Date.now()/1000)
+  /* ---------- detail header: Rename/Delete current selection ---------- */
+  document.getElementById('renameBtn').addEventListener('click', ()=>{
+    if (!details.scope || !details.id) return;
+    const current = details.titleEl.textContent || '';
+    const name = prompt(`Rename ${details.scope}`, current); if (!name) return;
+    if (details.scope === 'topic') {
+      const [r] = driver.select(`select subject_id from topics where id=?`, [details.id]);
+      driver.exec(`update topics set name=? where id=?`, [name, details.id]);
+      queue(`topic:${details.id}`, 'topic', 'upsert', { id: details.id, subject_id: r.subject_id, name, created_at: Math.floor(Date.now()/1000) });
+      renderTopics(r.subject_id);
+    } else if (details.scope === 'chunk') {
+      const [r] = driver.select(`select topic_id from chunks where id=?`, [details.id]);
+      driver.exec(`update chunks set name=? where id=?`, [name, details.id]);
+      queue(`chunk:${details.id}`, 'chunk', 'upsert', { id: details.id, topic_id: r.topic_id, name, created_at: Math.floor(Date.now()/1000) });
+      renderChunks(r.topic_id);
+    }
+    setDetail(details.scope, details.id, name);
   });
-  document.getElementById('pdfTitle').value='';
-  document.getElementById('pdfUrl').value='';
-  loadNotes();
-});
 
-/* Add new IMAGE note(s) */
-document.getElementById('imgInput').addEventListener('change', async (e)=>{
-  if (!details.scope) return;
-  for (const f of [...e.target.files]) {
-    const ext = (f.name.split('.').pop()||'png').toLowerCase();
-    const id  = crypto.randomUUID();
-    const previewPath = `/images/${details.scope}/${details.id}/${id}.${ext}`;
-    await writeBlob(previewPath, f);
-    driver.exec(`insert into notes(scope,scope_id,kind,title,path) values(?,?,?,?,?)`,
-      [details.scope, details.id, 'image', f.name, previewPath]);
+  document.getElementById('deleteBtn').addEventListener('click', async ()=>{
+    if (!details.scope || !details.id) return;
+    if (!confirm(`Delete this ${details.scope} and its notes?`)) return;
+    if (details.scope === 'topic') {
+      const [r] = driver.select(`select subject_id from topics where id=?`, [details.id]);
+      const chunkIds = driver.select(`select id from chunks where topic_id=?`, [details.id]).map(x=>x.id);
+      const noteIds = driver.select(`
+        select n.id from notes n
+        where (n.scope='topic' and n.scope_id=?)
+           or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
+      `, [details.id, details.id]).map(x=>x.id);
+      for (const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
+      for (const cid of chunkIds) queue(`chunk:${cid}`,'chunk','delete',null);
+      queue(`topic:${details.id}`,'topic','delete',null);
+      for (const nid of noteIds) await deleteImageNoteCascade(nid);
+      driver.exec(`delete from topics where id=?`, [details.id]);
+      collapsed.topics.delete(details.id); saveCollapse();
+      await loadTree(); setDetail(null,null,'');
+    } else if (details.scope === 'chunk') {
+      const [r] = driver.select(`select topic_id from chunks where id=?`, [details.id]);
+      const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [details.id]).map(x=>x.id);
+      for (const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
+      queue(`chunk:${details.id}`,'chunk','delete',null);
+      for (const nid of noteIds) await deleteImageNoteCascade(nid);
+      driver.exec(`delete from chunks where id=?`, [details.id]);
+      await renderChunks(r.topic_id); setDetail(null,null,'');
+    }
+  });
+
+  /* ---------- Notes UI (images + PDFs) + Lightbox ---------- */
+  const imageList = document.getElementById('imageList');
+  const pdfList   = document.getElementById('pdfList');
+
+  // Track blob URLs to revoke and avoid memory leaks
+  let noteBlobURLs = new Set();
+  function clearNoteBlobURLs(){
+    for (const u of noteBlobURLs) { try { URL.revokeObjectURL(u); } catch(_){} }
+    noteBlobURLs.clear();
+  }
+
+  document.getElementById('addPdf').addEventListener('click', ()=>{
+    if (!details.scope) return;
+    const title = (document.getElementById('pdfTitle').value || '').trim() || 'PDF';
+    const url   = (document.getElementById('pdfUrl').value || '').trim();
+    if (!url) return alert('Add a valid URL');
+    driver.exec(`insert into notes(scope,scope_id,kind,title,url) values(?,?,?,?,?)`,
+      [details.scope, details.id, 'pdf', title, url]);
     const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
-    driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid, 1, previewPath]);
     queue(`note:${nid}`, 'note', 'upsert', {
       id:nid, scope:details.scope, scope_id:details.id,
-      kind:'image', title:f.name, path:previewPath, created_at:Math.floor(Date.now()/1000)
+      kind:'pdf', title, url, created_at:Math.floor(Date.now()/1000)
     });
+    document.getElementById('pdfTitle').value='';
+    document.getElementById('pdfUrl').value='';
+    loadNotes();
+  });
+
+  document.getElementById('imgInput').addEventListener('change', async (e)=>{
+    if (!details.scope) return;
+    for (const f of [...e.target.files]) {
+      const ext = (f.name.split('.').pop()||'png').toLowerCase();
+      const id  = crypto.randomUUID();
+      const previewPath = `/images/${details.scope}/${details.id}/${id}.${ext}`;
+      await writeBlob(previewPath, f);
+      driver.exec(`insert into notes(scope,scope_id,kind,title,path) values(?,?,?,?,?)`,
+        [details.scope, details.id, 'image', f.name, previewPath]);
+      const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
+      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid, 1, previewPath]);
+      queue(`note:${nid}`, 'note', 'upsert', {
+        id:nid, scope:details.scope, scope_id:details.id,
+        kind:'image', title:f.name, path:previewPath, created_at:Math.floor(Date.now()/1000)
+      });
+    }
+    e.target.value = '';
+    loadNotes();
+  });
+
+  async function loadNotes(){
+    // Clean previous object URLs
+    clearNoteBlobURLs();
+
+    imageList.innerHTML = '';
+    pdfList.innerHTML   = '';
+
+    // --- IMAGE notes
+    const imgs = driver.select(`
+      select id,title,path from notes
+      where scope=? and scope_id=? and kind='image'
+      order by id desc`, [details.scope, details.id]);
+
+    for (const r of imgs) {
+      let previewPath = r.path;
+      const pages = driver.select(
+        `select id,page,path from image_pages where note_id=? order by page asc`, [r.id]
+      );
+      if (pages.length) previewPath = pages[0].path;
+
+      const prevBlob = await readFile(previewPath).catch(()=>null);
+      const prevURL  = prevBlob ? URL.createObjectURL(prevBlob) : '';
+
+      if (prevURL) noteBlobURLs.add(prevURL);
+
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.dataset.noteid = r.id;
+      card.innerHTML = `
+        ${prevURL ? `<img class="preview" src="${prevURL}" alt="${esc(r.title||'image')}"/>` : `<div class="small">Missing image</div>`}
+        <input type="text" value="${esc(r.title||'')}" placeholder="Caption" class="cap" data-id="${r.id}" style="margin-top:6px"/>
+        <div class="row" style="margin-top:6px">
+          <button class="ghost slim" data-act="save-cap" data-id="${r.id}">Save</button>
+          <button class="warn slim" data-act="del-imgnote" data-id="${r.id}">Delete</button>
+        </div>
+        <div class="row" style="margin-top:6px;align-items:flex-start">
+          <label class="filelabel slim" for="pages-${r.id}">+ Pages</label>
+          <input id="pages-${r.id}" type="file" accept="image/*" multiple data-act="add-pages" data-id="${r.id}"/>
+          <div class="thumbs" id="thumbs-${r.id}"></div>
+        </div>`;
+      imageList.appendChild(card);
+
+      const thumbs = card.querySelector(`#thumbs-${r.id}`);
+      for (const p of pages) {
+        const b = await readFile(p.path).catch(()=>null);
+        if (!b) continue;
+        const u = URL.createObjectURL(b);
+        noteBlobURLs.add(u);
+        const t = document.createElement('img');
+        t.src = u; t.dataset.note = r.id; t.dataset.page = p.page;
+        t.alt = `Page ${p.page}`;
+        thumbs.appendChild(t);
+      }
+    }
+
+    // --- PDF notes
+    const pdfs = driver.select(`
+      select id,title,url from notes
+      where scope=? and scope_id=? and kind='pdf'
+      order by id desc`, [details.scope, details.id]);
+
+    for (const r of pdfs) {
+      const row = document.createElement('div'); row.className = 'card';
+      row.innerHTML = `
+        <div class="row" style="justify-content:space-between">
+          <input type="text" class="pdftitle" data-id="${r.id}" value="${esc(r.title||'PDF')}"/>
+          <button class="ghost slim" data-act="save-pdf" data-id="${r.id}">Save</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <input type="url" class="pdfurl" data-id="${r.id}" value="${esc(r.url||'')}"/>
+          <a class="link" href="${r.url||'#'}" target="_blank" rel="noopener noreferrer">Open</a>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <button class="warn slim" data-act="del-pdf" data-id="${r.id}">Delete</button>
+        </div>`;
+      pdfList.appendChild(row);
+    }
   }
-  e.target.value = '';
-  loadNotes();
-});
 
-/* Render notes for current selection */
-async function loadNotes(){
-  imageList.innerHTML = '';
-  pdfList.innerHTML   = '';
+  imageList.addEventListener('change', async (e)=>{
+    const fi = e.target.closest('input[type=file][data-act="add-pages"]');
+    if (!fi) return;
+    const noteId = Number(fi.dataset.id);
+    let next = driver.select(`select coalesce(max(page),0)+1 as n from image_pages where note_id=?`, [noteId])[0].n;
+    for (const f of [...fi.files]) {
+      const ext  = (f.name.split('.').pop()||'png').toLowerCase();
+      const id   = crypto.randomUUID();
+      const path = `/images/n${noteId}/${id}.${ext}`;
+      await writeBlob(path, f);
+      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId, next++, path]);
+    }
+    const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
+    if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
+    fi.value = '';
+    loadNotes();
+  });
 
-  // --- IMAGE notes
-  const imgs = driver.select(`
-    select id,title,path from notes
-    where scope=? and scope_id=? and kind='image'
-    order by id desc`, [details.scope, details.id]);
+  imageList.addEventListener('keydown', (e)=>{
+    if (e.target.classList.contains('chunk-pill')) {
+      clickViaKeys(e, t => t);
+    }
+  });
 
-  for (const r of imgs) {
-    let previewPath = r.path;
-    const pages = driver.select(
-      `select id,page,path from image_pages where note_id=? order by page asc`, [r.id]
-    );
-    if (pages.length) previewPath = pages[0].path;
+  imageList.addEventListener('click', async (e)=>{
+    const btn = e.target.closest('button');
+    const noteCard = e.target.closest('.card');
+    if (btn) {
+      const id = Number(btn.dataset.id);
+      if (btn.dataset.act === 'save-cap') {
+        const cap = noteCard.querySelector('input.cap').value;
+        driver.exec(`update notes set title=? where id=?`, [cap, id]);
+        const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
+        if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
+      } else if (btn.dataset.act === 'del-imgnote') {
+        if (!confirm('Delete this image note (and all its pages)?')) return;
+        queue(`note:${id}`, 'note', 'delete', null);
+        await deleteImageNoteCascade(id);
+        loadNotes();
+      }
+      return;
+    }
+    if (e.target.matches('.thumbs img')) {
+      openLightboxForNote(Number(e.target.dataset.note), Number(e.target.dataset.page));
+      return;
+    }
+    if (e.target.matches('img.preview')) {
+      openLightboxForNote(Number(noteCard.dataset.noteid), 1);
+    }
+  });
 
-    const prevBlob = await readFile(previewPath).catch(()=>null);
-    const prevURL  = prevBlob ? URL.createObjectURL(prevBlob) : '';
+  pdfList.addEventListener('click', async (e)=>{
+    const b = e.target.closest('button'); 
+    const link = e.target.closest('a.link');
+    if (link) {
+      e.preventDefault();
+      const card = link.closest('.card');
+      const title = (card.querySelector('.pdftitle')?.value || 'PDF').trim();
+      const url = (card.querySelector('.pdfurl')?.value || link.getAttribute('href') || '').trim();
+      if (!url) return;
+      openPdfInModal(title, url);
+      return;
+    }
+    if (!b) return;
+    const id = Number(b.dataset.id);
+    if (b.dataset.act === 'save-pdf') {
+      const card  = b.closest('.card');
+      const title = card.querySelector('.pdftitle').value;
+      const url   = card.querySelector('.pdfurl').value;
+      driver.exec(`update notes set title=?, url=? where id=?`, [title, url, id]);
+      const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
+      if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
+    } else if (b.dataset.act === 'del-pdf') {
+      if (!confirm('Delete PDF link?')) return;
+      queue(`note:${id}`, 'note', 'delete', null);
+      driver.exec(`delete from notes where id=?`, [id]);
+      loadNotes();
+    }
+  });
 
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.dataset.noteid = r.id;
-    card.innerHTML = `
-      ${prevURL ? `<img class="preview" src="${prevURL}" alt="${esc(r.title||'image')}"/>` : `<div class="small">Missing image</div>`}
-      <input type="text" value="${esc(r.title||'')}" placeholder="Caption" class="cap" data-id="${r.id}" style="margin-top:6px"/>
-      <div class="row" style="margin-top:6px">
-        <button class="ghost slim" data-act="save-cap" data-id="${r.id}">Save</button>
-        <button class="warn slim" data-act="del-imgnote" data-id="${r.id}">Delete</button>
-      </div>
-      <div class="row" style="margin-top:6px;align-items:flex-start">
-        <label class="filelabel slim" for="pages-${r.id}">+ Pages</label>
-        <input id="pages-${r.id}" type="file" accept="image/*" multiple data-act="add-pages" data-id="${r.id}"/>
-        <div class="thumbs" id="thumbs-${r.id}"></div>
-      </div>`;
-    imageList.appendChild(card);
+  /* ---------- Lightbox ---------- */
+  const lbEl    = document.getElementById('lightbox');
+  const lbStack = document.getElementById('lbStack');
+  const lbClose = document.querySelector('.lightbox-close');
+  const lbVP    = lbEl.querySelector('.viewport');
+  let lbZoom = 1;
+  let lbURLs = new Set();
 
-    const thumbs = card.querySelector(`#thumbs-${r.id}`);
+  function lbUpdateZoom(){
+    if (lbZoom===1){ lbEl.classList.remove('zoomed'); lbStack.style.setProperty('--z','1'); lbVP.scrollTop=lbVP.scrollLeft=0; }
+    else { lbEl.classList.add('zoomed'); lbStack.style.setProperty('--z', String(lbZoom)); }
+  }
+  function lbRevoke(){
+    for (const u of lbURLs) { try { URL.revokeObjectURL(u); } catch(_){} }
+    lbURLs.clear();
+  }
+  function lbCloseAll(){ 
+    lbEl.classList.remove('show','zoomed'); 
+    lbEl.setAttribute('aria-hidden','true'); 
+    lbStack.innerHTML=''; 
+    lbZoom=1; 
+    lbRevoke();
+  }
+  lbClose.addEventListener('click', ()=>{ if(lbZoom>1){ lbZoom=1; lbUpdateZoom(); } else lbCloseAll(); });
+  lbEl.addEventListener('click', (e)=>{ if(e.target===lbEl) lbCloseAll(); });
+  lbVP.addEventListener('click', (e)=>{ if(e.target===lbVP) lbCloseAll(); });
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') lbCloseAll(); });
+
+  async function openLightboxForNote(noteId, startPage=1){
+    const note  = driver.select(`select title from notes where id=?`, [noteId])[0];
+    const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [noteId]);
+    if (!pages.length) {
+      const head = driver.select(`select path from notes where id=?`, [noteId])[0];
+      if (!head?.path) return;
+      pages.push({page:1, path:head.path});
+    }
+    lbStack.innerHTML = ''; lbRevoke();
     for (const p of pages) {
       const b = await readFile(p.path).catch(()=>null);
       if (!b) continue;
       const u = URL.createObjectURL(b);
-      const t = document.createElement('img');
-      t.src = u; t.dataset.note = r.id; t.dataset.page = p.page;
-      thumbs.appendChild(t);
+      lbURLs.add(u);
+      const im = document.createElement('img');
+      im.src = u;
+      im.alt = (note?.title||'image') + ` · p${p.page}`;
+      im.id  = `p${p.page}`;
+      lbStack.appendChild(im);
     }
+    lbEl.classList.add('show'); lbEl.setAttribute('aria-hidden','false'); lbZoom=1; lbUpdateZoom();
+    const tgt = document.getElementById(`p${startPage}`); if (tgt) tgt.scrollIntoView({block:'start', behavior:'instant'});
   }
 
-  // --- PDF notes
-  const pdfs = driver.select(`
-    select id,title,url from notes
-    where scope=? and scope_id=? and kind='pdf'
-    order by id desc`, [details.scope, details.id]);
-
-  for (const r of pdfs) {
-    const row = document.createElement('div'); row.className = 'card';
-    row.innerHTML = `
-      <div class="row" style="justify-content:space-between">
-        <input type="text" class="pdftitle" data-id="${r.id}" value="${esc(r.title||'PDF')}"/>
-        <button class="ghost slim" data-act="save-pdf" data-id="${r.id}">Save</button>
-      </div>
-      <div class="row" style="margin-top:6px">
-        <input type="url" class="pdfurl" data-id="${r.id}" value="${esc(r.url||'')}"/>
-        <a class="link" href="${r.url||'#'}" target="_blank" rel="noopener">Open</a>
-      </div>
-      <div class="row" style="margin-top:6px">
-        <button class="warn slim" data-act="del-pdf" data-id="${r.id}">Delete</button>
-      </div>`;
-    pdfList.appendChild(row);
-  }
-}
-
-/* extra pages uploader */
-imageList.addEventListener('change', async (e)=>{
-  const fi = e.target.closest('input[type=file][data-act="add-pages"]');
-  if (!fi) return;
-  const noteId = Number(fi.dataset.id);
-  let next = driver.select(`select coalesce(max(page),0)+1 as n from image_pages where note_id=?`, [noteId])[0].n;
-  for (const f of [...fi.files]) {
-    const ext  = (f.name.split('.').pop()||'png').toLowerCase();
-    const id   = crypto.randomUUID();
-    const path = `/images/n${noteId}/${id}.${ext}`;
-    await writeBlob(path, f);
-    driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId, next++, path]);
-  }
-  const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
-  if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
-  fi.value = '';
-  loadNotes();
-});
-
-/* image card actions + lightbox open */
-imageList.addEventListener('click', async (e)=>{
-  const btn = e.target.closest('button');
-  const noteCard = e.target.closest('.card');
-  if (btn) {
-    const id = Number(btn.dataset.id);
-    if (btn.dataset.act === 'save-cap') {
-      const cap = noteCard.querySelector('input.cap').value;
-      driver.exec(`update notes set title=? where id=?`, [cap, id]);
-      const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
-      if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
-    } else if (btn.dataset.act === 'del-imgnote') {
-      if (!confirm('Delete this image note (and all its pages)?')) return;
-      queue(`note:${id}`, 'note', 'delete', null);
-      await deleteImageNoteCascade(id);
-      loadNotes();
-    }
-    return;
-  }
-  if (e.target.matches('.thumbs img')) {
-    openLightboxForNote(Number(e.target.dataset.note), Number(e.target.dataset.page));
-    return;
-  }
-  if (e.target.matches('img.preview')) {
-    openLightboxForNote(Number(noteCard.dataset.noteid), 1);
-  }
-});
-
-/* PDF save/delete */
-pdfList.addEventListener('click', async (e)=>{
-  const b = e.target.closest('button'); if (!b) return;
-  const id = Number(b.dataset.id);
-  if (b.dataset.act === 'save-pdf') {
-    const card  = b.closest('.card');
-    const title = card.querySelector('.pdftitle').value;
-    const url   = card.querySelector('.pdfurl').value;
-    driver.exec(`update notes set title=?, url=? where id=?`, [title, url, id]);
-    const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
-    if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
-  } else if (b.dataset.act === 'del-pdf') {
-    if (!confirm('Delete PDF link?')) return;
-    queue(`note:${id}`, 'note', 'delete', null);
-    driver.exec(`delete from notes where id=?`, [id]);
-    loadNotes();
-  }
-});
-
-/* ---------- Lightbox (restored) ---------- */
-const lbEl    = document.getElementById('lightbox');
-const lbStack = document.getElementById('lbStack');
-const lbClose = document.querySelector('.lightbox-close');
-const lbVP    = lbEl.querySelector('.viewport');
-let lbZoom = 1;
-function lbUpdateZoom(){
-  if (lbZoom===1){ lbEl.classList.remove('zoomed'); lbStack.style.setProperty('--z','1'); lbVP.scrollTop=lbVP.scrollLeft=0; }
-  else { lbEl.classList.add('zoomed'); lbStack.style.setProperty('--z', String(lbZoom)); }
-}
-function lbCloseAll(){ lbEl.classList.remove('show','zoomed'); lbEl.setAttribute('aria-hidden','true'); lbStack.innerHTML=''; lbZoom=1; }
-lbClose.addEventListener('click', ()=>{ if(lbZoom>1){ lbZoom=1; lbUpdateZoom(); } else lbCloseAll(); });
-lbEl.addEventListener('click', (e)=>{ if(e.target===lbEl) lbCloseAll(); });
-lbVP.addEventListener('click', (e)=>{ if(e.target===lbVP) lbCloseAll(); });
-document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') lbCloseAll(); });
-
-async function openLightboxForNote(noteId, startPage=1){
-  const note  = driver.select(`select title from notes where id=?`, [noteId])[0];
-  const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [noteId]);
-  if (!pages.length) {
-    const head = driver.select(`select path from notes where id=?`, [noteId])[0];
-    if (!head?.path) return;
-    pages.push({page:1, path:head.path});
-  }
-  lbStack.innerHTML = '';
-  for (const p of pages) {
-    const b = await readFile(p.path).catch(()=>null);
-    if (!b) continue;
-    const u = URL.createObjectURL(b);
-    const im = document.createElement('img');
-    im.src = u;
-    im.alt = (note?.title||'image') + ` · p${p.page}`;
-    im.id  = `p${p.page}`;
-    lbStack.appendChild(im);
-  }
-  lbEl.classList.add('show'); lbEl.setAttribute('aria-hidden','false'); lbZoom=1; lbUpdateZoom();
-  const tgt = document.getElementById(`p${startPage}`); if (tgt) tgt.scrollIntoView({block:'start', behavior:'instant'});
-}
-
-  /* ---------- Intercept "Open" to use chunked viewer (Google Drive or direct PDF) ---------- */
-  // Robust PDF.js loader (local → CDN fallback)
+  /* ---------- PDF viewer (chunked, Drive aware) ---------- */
   async function loadPdfJs() {
     try {
       const mod = await import('/lib/pdfjs/pdf.mjs');
@@ -830,303 +927,285 @@ async function openLightboxForNote(noteId, startPage=1){
       return u.searchParams.get('id') || '';
     } catch { return ''; }
   }
-  // one-time modal wiring (add once)
-const modal = document.getElementById('pdfModal');
-const viewer = document.getElementById('pdfViewer');
-const titleBar = document.getElementById('pdfTitleBar');
-const metaEl = document.getElementById('pdfMeta');
-const closeBtn = document.getElementById('pdfClose');
- 
-function closePdfModal() {
-  modal.style.display = 'none';
-  viewer.innerHTML = '';
-  metaEl.textContent = '';
-}
-closeBtn.addEventListener('click', closePdfModal);
-modal.addEventListener('click', (e) => { if (e.target === modal) closePdfModal(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePdfModal(); });
+  const modal = document.getElementById('pdfModal');
+  const viewer = document.getElementById('pdfViewer');
+  const titleBar = document.getElementById('pdfTitleBar');
+  const metaEl = document.getElementById('pdfMeta');
+  const closeBtn = document.getElementById('pdfClose');
+
+  function closePdfModal() {
+    modal.style.display = 'none';
+    viewer.innerHTML = '';
+    metaEl.textContent = '';
+  }
+  closeBtn.addEventListener('click', closePdfModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closePdfModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePdfModal(); });
+
   async function pickPdfSource(urlOrId){
-  const id = extractDriveId(urlOrId);
-  if (!id) return urlOrId;
+    const id = extractDriveId(urlOrId);
+    if (!id) return urlOrId;
 
-  // Prefer the SW endpoint (range-friendly, same-origin)
-  const swSrc = `/drivepdf/${id}`;
-  try {
-    const probe = await fetch(swSrc, { headers: { Range: 'bytes=0-0' } });
-    if (probe.ok) return swSrc;
-  } catch (_) {}
+    // Prefer the SW endpoint (range-friendly, same-origin)
+    const swSrc = `/drivepdf/${id}`;
+    try {
+      const probe = await fetch(swSrc, { headers: { Range: 'bytes=0-0' } });
+      if (probe.ok) return swSrc;
+    } catch (_) {}
 
-  // Fallback: direct Drive file (works if the file is shared "Anyone with the link")
-  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`;
-}
-
-async function openPdfInModal(title, urlOrId) {
-  // Show UI first and wire controls BEFORE any awaits
-  viewer.innerHTML = '';
-  modal.style.display = 'block';
-  titleBar.textContent = title || 'PDF';
-  metaEl.textContent = 'Loading…';
-
-  // Drive link → local SW endpoint
-  const src = await pickPdfSource(urlOrId);
-
-  let pdfjsLib, workerSrc;
-  try {
-    ({ pdfjsLib, workerSrc } = await loadPdfJs());
-    // workerSrc can be CDN or local; setting it is harmless on non-module-worker browsers
-    pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
-  } catch (e) {
-    metaEl.textContent = 'Failed to load viewer.';
-    console.error(e);
-    return; // Close still works because handlers are already bound
+    // Fallback: direct Drive file (works if the file is shared "Anyone with the link")
+    return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`;
   }
 
-  let pdf;
-  try {
-    const loadingTask = pdfjsLib.getDocument({
-      url: src,
-      // enable chunked loading
-      disableStream: false,
-      disableAutoFetch: true,
-      rangeChunkSize: 4 * 1024 * 1024
-    });
-    pdf = await loadingTask.promise;
-  } catch (e) {
-    metaEl.textContent = 'Could not open this PDF. (Network or CORS?)';
-    console.error(e);
-    return;
-  }
+  async function openPdfInModal(title, urlOrId) {
+    viewer.innerHTML = '';
+    modal.style.display = 'block';
+    titleBar.textContent = title || 'PDF';
+    metaEl.textContent = 'Loading…';
 
-  metaEl.textContent = `${pdf.numPages} pages`;
+    const src = await pickPdfSource(urlOrId);
 
-  const BATCH = 10, SCALE = 1.5;
+    let pdfjsLib, workerSrc;
+    try {
+      ({ pdfjsLib, workerSrc } = await loadPdfJs());
+      pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
+    } catch (e) {
+      metaEl.textContent = 'Failed to load viewer.';
+      console.error(e);
+      return;
+    }
 
-  const pageIO = new IntersectionObserver(async (entries) => {
-    for (const e of entries) {
-      const el = e.target;
-      if (!e.isIntersecting || el.dataset.rendered) continue;
-      try {
-        const n = +el.dataset.page;
-        const page = await pdf.getPage(n);
-        const vp = page.getViewport({ scale: SCALE });
-        const canvas = el.querySelector('canvas');
-        const ctx = canvas.getContext('2d', { willReadFrequently: false });
-        const ratio = Math.min(2, devicePixelRatio || 1);
-        canvas.width  = Math.floor(vp.width * ratio);
-        canvas.height = Math.floor(vp.height * ratio);
-        canvas.style.width = vp.width + 'px';
-        canvas.style.height = vp.height + 'px';
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
-        el.dataset.rendered = '1';
-      } catch (err) {
-        el.innerHTML = '<div class="small" style="padding:8px">Render failed</div>';
-        console.error(err);
+    let pdf;
+    try {
+      const loadingTask = pdfjsLib.getDocument({
+        url: src,
+        disableStream: false,
+        disableAutoFetch: true,
+        rangeChunkSize: 4 * 1024 * 1024
+      });
+      pdf = await loadingTask.promise;
+    } catch (e) {
+      metaEl.textContent = 'Could not open this PDF. (Network or CORS?)';
+      console.error(e);
+      return;
+    }
+
+    metaEl.textContent = `${pdf.numPages} pages`;
+
+    const BATCH = 10, SCALE = 1.5;
+
+    const pageIO = new IntersectionObserver(async (entries) => {
+      for (const e of entries) {
+        const el = e.target;
+        if (!e.isIntersecting || el.dataset.rendered) continue;
+        try {
+          const n = +el.dataset.page;
+          const page = await pdf.getPage(n);
+          const vp = page.getViewport({ scale: SCALE });
+          const canvas = el.querySelector('canvas');
+          const ctx = canvas.getContext('2d', { willReadFrequently: false });
+          const ratio = Math.min(2, devicePixelRatio || 1);
+          canvas.width  = Math.floor(vp.width * ratio);
+          canvas.height = Math.floor(vp.height * ratio);
+          canvas.style.width = vp.width + 'px';
+          canvas.style.height = vp.height + 'px';
+          await page.render({ canvasContext: ctx, viewport: vp }).promise;
+          el.dataset.rendered = '1';
+        } catch (err) {
+          el.innerHTML = '<div class="small" style="padding:8px">Render failed</div>';
+          console.error(err);
+        }
       }
+    }, { root: viewer, rootMargin: '1000px 0px' });
+
+    const batchIO = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        appendBatch(+e.target.dataset.nextBatch);
+        batchIO.unobserve(e.target);
+      }
+    }, { root: viewer, rootMargin: '1200px 0px' });
+
+    function pageShell(n) {
+      const d = document.createElement('div');
+      d.className = 'page';
+      d.dataset.page = n;
+      d.innerHTML = '<canvas></canvas>';
+      pageIO.observe(d);
+      return d;
     }
-  }, { root: viewer, rootMargin: '1000px 0px' });
-
-  const batchIO = new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      if (!e.isIntersecting) continue;
-      appendBatch(+e.target.dataset.nextBatch);
-      batchIO.unobserve(e.target);
+    function sentinel(next) {
+      const s = document.createElement('div');
+      s.className = 'sentinel';
+      s.dataset.nextBatch = next;
+      s.textContent = 'Loading more pages…';
+      batchIO.observe(s);
+      return s;
     }
-  }, { root: viewer, rootMargin: '1200px 0px' });
+    function appendBatch(i) {
+      const start = i * BATCH + 1;
+      const end = Math.min(start + BATCH - 1, pdf.numPages);
+      if (start > pdf.numPages) return;
+      const frag = document.createDocumentFragment();
+      for (let p = start; p <= end; p++) frag.appendChild(pageShell(p));
+      if (end < pdf.numPages) frag.appendChild(sentinel(i + 1));
+      viewer.appendChild(frag);
+    }
 
-  function pageShell(n) {
-    const d = document.createElement('div');
-    d.className = 'page';
-    d.dataset.page = n;
-    d.innerHTML = '<canvas></canvas>';
-    pageIO.observe(d);
-    return d;
-  }
-  function sentinel(next) {
-    const s = document.createElement('div');
-    s.className = 'sentinel';
-    s.dataset.nextBatch = next;
-    s.textContent = 'Loading more pages…';
-    batchIO.observe(s);
-    return s;
-  }
-  function appendBatch(i) {
-    const start = i * BATCH + 1;
-    const end = Math.min(start + BATCH - 1, pdf.numPages);
-    if (start > pdf.numPages) return;
-    const frag = document.createDocumentFragment();
-    for (let p = start; p <= end; p++) frag.appendChild(pageShell(p));
-    if (end < pdf.numPages) frag.appendChild(sentinel(i + 1));
-    viewer.appendChild(frag);
+    appendBatch(0);
   }
 
-  appendBatch(0);
-}
-
-
-  // Intercept the "Open" anchor in each PDF card to use the modal viewer
-  document.getElementById('pdfList').addEventListener('click', (e) => {
-    const a = e.target.closest('a.link'); if (!a) return;
-    e.preventDefault();
-    const card = a.closest('.card');
-    const title = (card.querySelector('.pdftitle')?.value || 'PDF').trim();
-    const url = (card.querySelector('.pdfurl')?.value || a.getAttribute('href') || '').trim();
-    if (!url) return;
-    openPdfInModal(title, url);
-  });
-
-  /* ---------- Image lightbox + CouchDB sync sections remain as in your file ---------- */
-  // (No changes needed here — your existing code below this point can remain.)
+  // Intercept PDF "Open" to use the modal viewer (handled in pdfList click handler above)
 
   /* ---------- CouchDB Sync (Save/Test/Sync + Pull) ---------- */
-const couchCfgKey = 'couchCfg-techstudy';
-const couchMsgEl  = document.getElementById('couchMsg');
+  const couchCfgKey = 'couchCfg-techstudy';
+  const couchMsgEl  = document.getElementById('couchMsg');
 
-const couch = {
-  cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
-  save(){ localStorage.setItem(couchCfgKey, JSON.stringify(this.cfg)); },
-  base(){
-    if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
-    return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
-  },
-  authHeader(){
-    if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
-    return null;
-  },
-  async ensureDb(){
-    const r = await fetch(this.base(), {
-      method: 'GET',
-      headers: this.authHeader() ? { Authorization: this.authHeader() } : {},
-      credentials: 'include'
-    });
-    if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
-    if (!r.ok) throw new Error(await r.text());
-    return r.json().catch(()=>null);
-  },
-  async fetchJson(path, opts = {}){
-    const headers = Object.assign(
-      { 'Accept': 'application/json' },
-      opts.headers || {},
-      this.authHeader() ? { 'Authorization': this.authHeader() } : {}
-    );
-    const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
+  const couch = {
+    cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
+    save(){ 
+      const { url, db, user, pass } = this.cfg || {};
+      // Store pass only if explicitly provided (keeps prior behavior)
+      localStorage.setItem(couchCfgKey, JSON.stringify({ url, db, user, ...(pass?{pass}: {}) })); 
+    },
+    base(){
+      if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
+      return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
+    },
+    authHeader(){
+      if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
+      return null;
+    },
+    async ensureDb(){
+      const r = await fetch(this.base(), {
+        method: 'GET',
+        headers: this.authHeader() ? { Authorization: this.authHeader() } : {},
+        credentials: 'include'
+      });
+      if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
+      if (!r.ok) throw new Error(await r.text());
+      return r.json().catch(()=>null);
+    },
+    async fetchJson(path, opts = {}){
+      const headers = Object.assign(
+        { 'Accept': 'application/json' },
+        opts.headers || {},
+        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
+      );
+      const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+  };
+
+  // Prefill sensible defaults once
+  if (!couch.cfg.url && !couch.cfg.db) {
+    couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
+    couch.save();
   }
-};
+  // hydrate form on load
+  (function hydrateCouchForm(){
+    document.getElementById('couchUrl').value  = couch.cfg.url  || '';
+    document.getElementById('couchDb').value   = couch.cfg.db   || '';
+    document.getElementById('couchUser').value = couch.cfg.user || '';
+    document.getElementById('couchPass').value = '';
+  })();
 
-// Prefill sensible defaults once
-if (!couch.cfg.url && !couch.cfg.db) {
-  couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
-  couch.save();
-}
-// hydrate form on load
-(function hydrateCouchForm(){
-  document.getElementById('couchUrl').value  = couch.cfg.url  || '';
-  document.getElementById('couchDb').value   = couch.cfg.db   || '';
-  document.getElementById('couchUser').value = couch.cfg.user || '';
-  document.getElementById('couchPass').value = '';
-})();
+  document.getElementById('couchSave').addEventListener('click', ()=>{
+    couch.cfg.url  = document.getElementById('couchUrl').value.trim();
+    couch.cfg.db   = document.getElementById('couchDb').value.trim();
+    couch.cfg.user = document.getElementById('couchUser').value.trim();
+    const pw       = document.getElementById('couchPass').value;
+    if (pw) couch.cfg.pass = pw;
+    couch.save();
+    couchMsgEl.textContent = 'Saved Couch settings.';
+  });
 
-// Button: Save
-document.getElementById('couchSave').addEventListener('click', ()=>{
-  couch.cfg.url  = document.getElementById('couchUrl').value.trim();
-  couch.cfg.db   = document.getElementById('couchDb').value.trim();
-  couch.cfg.user = document.getElementById('couchUser').value.trim();
-  const pw       = document.getElementById('couchPass').value;
-  if (pw) couch.cfg.pass = pw;
-  couch.save();
-  couchMsgEl.textContent = 'Saved Couch settings.';
-});
-
-// Button: Test
-document.getElementById('couchTest').addEventListener('click', async ()=>{
-  try {
-    const info = (await couch.ensureDb()) || (await couch.fetchJson(''));
-    couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`;
-  } catch (err) {
-    couchMsgEl.textContent = 'Test failed: ' + err.message;
-  }
-});
-
-// Minimal “Sync now” (push all local docs to CouchDB)
-document.getElementById('couchSync').addEventListener('click', async ()=>{
-  try{
-    couchMsgEl.textContent = 'Syncing…';
-    await couch.ensureDb();
-
-    // subjects/topics/chunks
-    for (const s of driver.select(`select id,name,created_at from subjects`)) {
-      await couch.fetchJson('/'+encodeURIComponent(`subject:${s.id}`), {
-        method:'PUT', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ _id:`subject:${s.id}`, type:'subject', ...s })
-      });
+  document.getElementById('couchTest').addEventListener('click', async ()=>{
+    try {
+      const info = (await couch.ensureDb()) || (await couch.fetchJson(''));
+      couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`;
+    } catch (err) {
+      couchMsgEl.textContent = 'Test failed: ' + err.message;
     }
-    for (const t of driver.select(`select id,subject_id,name,created_at from topics`)) {
-      await couch.fetchJson('/'+encodeURIComponent(`topic:${t.id}`), {
-        method:'PUT', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ _id:`topic:${t.id}`, type:'topic', ...t })
-      });
-    }
-    for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)) {
-      await couch.fetchJson('/'+encodeURIComponent(`chunk:${c.id}`), {
-        method:'PUT', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ _id:`chunk:${c.id}`, type:'chunk', ...c })
-      });
-    }
-    // notes (metadata only; images/attachments can be added later)
-    for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)) {
-      await couch.fetchJson('/'+encodeURIComponent(`note:${n.id}`), {
-        method:'PUT', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ _id:`note:${n.id}`, type:'note', ...n })
-      });
-    }
+  });
 
-    const info = await couch.fetchJson('');
-    couchMsgEl.textContent = `Sync done. Docs: ${info.doc_count}`;
-  }catch(err){
-    couchMsgEl.textContent = 'Sync failed: ' + err.message;
-  }
-});
+  // Minimal “Sync now” (push all local docs to CouchDB)
+  document.getElementById('couchSync').addEventListener('click', async ()=>{
+    try{
+      couchMsgEl.textContent = 'Syncing…';
+      await couch.ensureDb();
 
-// Minimal “Pull now” (refreshes from _all_docs; simple merge)
-document.getElementById('couchPull').addEventListener('click', async ()=>{
-  try{
-    await couch.ensureDb();
-    const all = await couch.fetchJson('/_all_docs?include_docs=true');
-    for (const row of all.rows) {
-      const doc = row.doc; if (!doc || doc._deleted) continue;
-      if (doc.type === 'subject') {
-        driver.exec(`insert into subjects(id,name,created_at) values(?,?,?)
-          on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
-          [doc.id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
-      } else if (doc.type === 'topic') {
-        driver.exec(`insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
-          on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
-          [doc.id, doc.subject_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
-      } else if (doc.type === 'chunk') {
-        driver.exec(`insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
-          on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
-          [doc.id, doc.topic_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
-      } else if (doc.type === 'note') {
-        driver.exec(`insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
-          values(?,?,?,?,?,?,?,?)
-          on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
-            title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
-          [doc.id, doc.scope, doc.scope_id, doc.kind, doc.title||'', doc.path||'', doc.url||'', doc.created_at||Math.floor(Date.now()/1000)]);
+      for (const s of driver.select(`select id,name,created_at from subjects`)) {
+        await couch.fetchJson('/'+encodeURIComponent(`subject:${s.id}`), {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ _id:`subject:${s.id}`, type:'subject', ...s })
+        });
       }
+      for (const t of driver.select(`select id,subject_id,name,created_at from topics`)) {
+        await couch.fetchJson('/'+encodeURIComponent(`topic:${t.id}`), {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ _id:`topic:${t.id}`, type:'topic', ...t })
+        });
+      }
+      for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)) {
+        await couch.fetchJson('/'+encodeURIComponent(`chunk:${c.id}`), {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ _id:`chunk:${c.id}`, type:'chunk', ...c })
+        });
+      }
+      for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)) {
+        await couch.fetchJson('/'+encodeURIComponent(`note:${n.id}`), {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ _id:`note:${n.id}`, type:'note', ...n })
+        });
+      }
+
+      const info = await couch.fetchJson('');
+      couchMsgEl.textContent = `Sync done. Docs: ${info.doc_count}`;
+    }catch(err){
+      couchMsgEl.textContent = 'Sync failed: ' + err.message;
     }
-    couchMsgEl.textContent = 'Pulled changes.';
-    loadTree();
-  }catch(err){
-    couchMsgEl.textContent = 'Pull failed: ' + err.message;
-  }
-});
+  });
+
+  // Minimal “Pull now” (refreshes from _all_docs; simple merge)
+  document.getElementById('couchPull').addEventListener('click', async ()=>{
+    try{
+      await couch.ensureDb();
+      const all = await couch.fetchJson('/_all_docs?include_docs=true');
+      for (const row of all.rows) {
+        const doc = row.doc; if (!doc || doc._deleted) continue;
+        if (doc.type === 'subject') {
+          driver.exec(`insert into subjects(id,name,created_at) values(?,?,?)
+            on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
+            [doc.id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+        } else if (doc.type === 'topic') {
+          driver.exec(`insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
+            on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
+            [doc.id, doc.subject_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+        } else if (doc.type === 'chunk') {
+          driver.exec(`insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
+            on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
+            [doc.id, doc.topic_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+        } else if (doc.type === 'note') {
+          driver.exec(`insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
+            values(?,?,?,?,?,?,?,?)
+            on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
+              title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
+            [doc.id, doc.scope, doc.scope_id, doc.kind, doc.title||'', doc.path||'', doc.url||'', doc.created_at||Math.floor(Date.now()/1000)]);
+        }
+      }
+      couchMsgEl.textContent = 'Pulled changes.';
+      loadTree();
+    }catch(err){
+      couchMsgEl.textContent = 'Pull failed: ' + err.message;
+    }
+  });
 
   /* init */
   setStatus('DB: OK (IndexedDB)');
   loadTree();
-
-  // If you already had auto-sync helpers below, keep them as-is.
-  // (Not repeated here to avoid duplicating your existing logic.)
 })();
 </script>
+</body>
+</html>
