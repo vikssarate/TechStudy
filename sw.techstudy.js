@@ -9,7 +9,7 @@
 */
 
 const APP_NS = 'techstudy';
-const VERSION = 'v9'; // bump when you change the SW
+const VERSION = 'v10'; // bump when you change the SW
 const CACHE_NAME = `study-notes-${APP_NS}-${VERSION}`;
 
 // Scope-aware base path (works for GitHub Pages project sites too)
@@ -18,9 +18,9 @@ const SCOPE_PATH = new URL(self.registration?.scope || self.location.href).pathn
 // ---- Google Drive chunking config ----
 const TILE_SIZE = 4 * 1024 * 1024;          // 4 MB tiles
 const CHUNK_DB_NAME = 'pdf-chunks';
-const DRIVE_API_KEY = 'YOUR_GOOGLE_API_KEY';  // <- set this (restricted) for best results
+const DRIVE_API_KEY = 'AIzaSyDZHZkniW8lHSenR-6lSyidFRzCAWfK0l0'; // ← your restricted key
 // Optional proxy (must support Range + CORS), e.g. 'https://driveproxy.techstudy.me?id='
-const DRIVE_PROXY = ''; 
+const DRIVE_PROXY = '';
 
 // Try to enable PouchDB tile cache (optional)
 let TileDB = null;
