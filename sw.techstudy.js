@@ -1,6 +1,6 @@
 /* sw.techstudy.js — TechStudy Notes (SQLite + IndexedDB) */
 const APP_NS = 'techstudy';
-const VERSION = 'v15'; // bump on every change
+const VERSION = 'v17'; // bump on every change
 const CACHE_NAME = `study-notes-${APP_NS}-${VERSION}`;
 
 const SCOPE_PATH = new URL(self.registration?.scope || self.location.href)
