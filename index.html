@@ -124,7 +124,7 @@ a.link{color:#8fb5ff;text-decoration:none}
           <div class="row">
             <label class="filelabel" for="imgInput">+ Add images</label>
             <input id="imgInput" type="file" accept="image/*" multiple/>
-            <span class="small">Images are stored privately in IndexedDB</span>
+            <span class="small">Images are stored privately in IndexedDB, and synced to CouchDB as attachments.</span>
           </div>
           <div id="imageList" class="scroll-x"></div>
         </div>
@@ -189,7 +189,7 @@ if ('serviceWorker' in navigator) {
     }
   };
 
-  /* --- Google Drive (UI fallback key) --- */
+  /* --- Google Drive (viewer key; lock to your domain in Google Cloud) --- */
   const DRIVE_API_KEY = 'AIzaSyDZHZkniW8lHSenR-6lSyidFRzCAWfK0l0';
 
   /* ---------- Robust sql.js loader (local → CDN fallback) ---------- */
@@ -294,23 +294,6 @@ if ('serviceWorker' in navigator) {
       created_at integer default (strftime('%s','now')),
       unique(note_id,page)
     );
-    /* --- Auto-sync bookkeeping --- */
-    create table if not exists sync_outbox(
-      id integer primary key,
-      doc_id text not null,
-      doc_type text not null,
-      action text not null check(action in ('upsert','delete')),
-      payload text,
-      created_at integer default (strftime('%s','now'))
-    );
-    create table if not exists sync_checkpoints(
-      key text primary key,
-      value text
-    );
-    create table if not exists rev_map(
-      doc_id text primary key,
-      rev text
-    );
   `);
 
   let saveTimer;
@@ -355,27 +338,112 @@ if ('serviceWorker' in navigator) {
     localStorage.setItem('coll-topics',   JSON.stringify([...collapsed.topics]));
   };
 
-  /* ---------- SYNC helpers ---------- */
-  function queue(doc_id, doc_type, action, obj){
-    driver.exec(`insert into sync_outbox(doc_id,doc_type,action,payload) values(?,?,?,?)`,
-      [doc_id, doc_type, action, obj?JSON.stringify(obj):null]);
+  /* ---------- SYNC helpers (CouchDB) ---------- */
+  const couchCfgKey = 'couchCfg-techstudy';
+  const couchMsgEl  = document.getElementById('couchMsg');
+
+  const couch = {
+    cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
+    save(){ 
+      const { url, db, user, pass } = this.cfg || {};
+      localStorage.setItem(couchCfgKey, JSON.stringify({ url, db, user, ...(pass?{pass}: {}) })); 
+    },
+    base(){
+      if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
+      return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
+    },
+    authHeader(){
+      if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
+      return null;
+    },
+    async ensureDb(){
+      const r = await fetch(this.base(), {
+        method: 'GET',
+        headers: this.authHeader() ? { Authorization: this.authHeader() } : {},
+        credentials: 'include'
+      });
+      if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
+      if (!r.ok) throw new Error(await r.text());
+      return r.json().catch(()=>null);
+    },
+    async fetchJson(path, opts = {}){
+      const headers = Object.assign(
+        { 'Accept': 'application/json' },
+        opts.headers || {},
+        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
+      );
+      const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    async fetchRaw(path, opts = {}) {
+      const headers = Object.assign(
+        {},
+        opts.headers || {},
+        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
+      );
+      const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
+      if (!res.ok) throw new Error(await res.text());
+      return res;
+    },
+    async getDoc(docId){
+      return this.fetchJson('/' + encodeURIComponent(docId), { method: 'GET' });
+    },
+    async upsertDoc(docId, body) {
+      let rev = null;
+      try { const existing = await this.getDoc(docId); rev = existing._rev || null; } catch (_) {}
+      const payload = rev ? { _id: docId, _rev: rev, ...body } : { _id: docId, ...body };
+      const res = await this.fetchJson('/' + encodeURIComponent(docId), {
+        method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      });
+      return res; // {ok:true, id, rev}
+    },
+    async putAttachment(docId, name, blob, rev){
+      const q = rev ? ('?rev=' + encodeURIComponent(rev)) : '';
+      const res = await this.fetchRaw('/' + encodeURIComponent(docId) + '/' + encodeURIComponent(name) + q, {
+        method:'PUT',
+        headers:{ 'Content-Type': blob?.type || 'application/octet-stream' },
+        body: blob
+      });
+      return res.json(); // {ok:true,id,rev}
+    },
+    async getAttachment(docId, name){
+      const res = await this.fetchRaw('/' + encodeURIComponent(docId) + '/' + encodeURIComponent(name), { method:'GET' });
+      return res.blob();
+    }
+  };
+
+  // Prefill sensible defaults once
+  if (!couch.cfg.url && !couch.cfg.db) {
+    couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
+    couch.save();
   }
-  function setRev(doc_id, rev){
-    driver.exec(`insert into rev_map(doc_id,rev) values(?,?)
-                 on conflict(doc_id) do update set rev=excluded.rev`, [doc_id, rev]);
-  }
-  function getRev(doc_id){
-    const r = driver.select(`select rev from rev_map where doc_id=?`, [doc_id])[0];
-    return r?.rev || null;
-  }
-  function getSince(){
-    const r = driver.select(`select value from sync_checkpoints where key='since'`)[0];
-    return r?.value || '0';
-  }
-  function setSince(v){
-    driver.exec(`insert into sync_checkpoints(key,value) values('since',?)
-                 on conflict(key) do update set value=excluded.value`, [v]);
-  }
+  // hydrate form on load
+  (function hydrateCouchForm(){
+    document.getElementById('couchUrl').value  = couch.cfg.url  || '';
+    document.getElementById('couchDb').value   = couch.cfg.db   || '';
+    document.getElementById('couchUser').value = couch.cfg.user || '';
+    document.getElementById('couchPass').value = '';
+  })();
+
+  document.getElementById('couchSave').addEventListener('click', ()=>{
+    couch.cfg.url  = document.getElementById('couchUrl').value.trim();
+    couch.cfg.db   = document.getElementById('couchDb').value.trim();
+    couch.cfg.user = document.getElementById('couchUser').value.trim();
+    const pw       = document.getElementById('couchPass').value;
+    if (pw) couch.cfg.pass = pw;
+    couch.save();
+    couchMsgEl.textContent = 'Saved Couch settings.';
+  });
+
+  document.getElementById('couchTest').addEventListener('click', async ()=>{
+    try {
+      const info = (await couch.ensureDb()) || (await couch.fetchJson(''));
+      couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`;
+    } catch (err) {
+      couchMsgEl.textContent = 'Test failed: ' + err.message;
+    }
+  });
 
   /* ---------- UI refs ---------- */
   const subjectsEl = document.getElementById('subjects');
@@ -467,9 +535,8 @@ if ('serviceWorker' in navigator) {
     `).join('');
   }
 
-  /* ---------- left pane actions + QUEUE ---------- */
+  /* ---------- left pane actions ---------- */
   subjectsEl.addEventListener('keydown', (e)=>{
-    // keyboard "click" for focusable headings/pills
     clickViaKeys(e, t => t.closest('[data-act]') || (t.classList.contains('chunk-pill') ? t : null));
   });
 
@@ -499,7 +566,6 @@ if ('serviceWorker' in navigator) {
         const name = (inp.value || '').trim(); if (!name) return;
         driver.exec(`insert into topics(subject_id,name) values(?,?)`, [sid, name]);
         const tid = driver.select(`select last_insert_rowid() as id`)[0].id;
-        queue(`topic:${tid}`, 'topic', 'upsert', { id: tid, subject_id: sid, name, created_at: Math.floor(Date.now()/1000) });
         inp.value = '';
         await renderTopics(sid);
 
@@ -507,7 +573,6 @@ if ('serviceWorker' in navigator) {
         const [r] = driver.select(`select name from subjects where id=?`, [id]);
         const name = prompt('Rename subject', r?.name || ''); if (!name) return;
         driver.exec(`update subjects set name=? where id=?`, [name, id]);
-        queue(`subject:${id}`, 'subject', 'upsert', { id, name, created_at: Math.floor(Date.now()/1000) });
         await loadTree();
 
       } else if (act === 'del-subj') {
@@ -519,11 +584,9 @@ if ('serviceWorker' in navigator) {
           where (n.scope='topic' and n.scope_id in (select id from topics where subject_id=?))
              or (n.scope='chunk' and n.scope_id in (select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?))
         `, [id, id]).map(x => x.id);
-        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-        for (const cid of chunkIds) queue(`chunk:${cid}`, 'chunk', 'delete', null);
-        for (const tid of topicIds) queue(`topic:${tid}`, 'topic', 'delete', null);
-        queue(`subject:${id}`, 'subject', 'delete', null);
         for (const nid of noteIds) await deleteImageNoteCascade(nid);
+        driver.exec(`delete from chunks where topic_id in (select id from topics where subject_id=?)`, [id]);
+        driver.exec(`delete from topics where subject_id=?`, [id]);
         driver.exec(`delete from subjects where id=?`, [id]);
         collapsed.subjects.delete(id); saveCollapse();
         await loadTree(); setDetail(null, null, '');
@@ -532,23 +595,19 @@ if ('serviceWorker' in navigator) {
         const [r] = driver.select(`select name,subject_id from topics where id=?`, [id]);
         const name = prompt('Rename topic', r?.name || ''); if (!name) return;
         driver.exec(`update topics set name=? where id=?`, [name, id]);
-        queue(`topic:${id}`, 'topic', 'upsert', { id, subject_id: r.subject_id, name, created_at: Math.floor(Date.now()/1000) });
         await renderTopics(r.subject_id);
         if (details.scope === 'topic' && details.id === id) setDetail('topic', id, name);
 
       } else if (act === 'del-topic') {
         if (!confirm('Delete topic, its chunks & notes?')) return;
         const [r] = driver.select(`select subject_id from topics where id=?`, [id]);
-        const chunkIds = driver.select(`select id from chunks where topic_id=?`, [id]).map(x => x.id);
         const noteIds  = driver.select(`
           select n.id from notes n
           where (n.scope='topic' and n.scope_id=?)
              or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
         `, [id, id]).map(x => x.id);
-        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-        for (const cid of chunkIds) queue(`chunk:${cid}`, 'chunk', 'delete', null);
-        queue(`topic:${id}`, 'topic', 'delete', null);
         for (const nid of noteIds) await deleteImageNoteCascade(nid);
+        driver.exec(`delete from chunks where topic_id=?`, [id]);
         driver.exec(`delete from topics where id=?`, [id]);
         collapsed.topics.delete(id); saveCollapse();
         await loadTree(); setDetail(null, null, '');
@@ -557,15 +616,12 @@ if ('serviceWorker' in navigator) {
         const topicId = id;
         const name = prompt('New chunk name'); if (!name) return;
         driver.exec(`insert into chunks(topic_id,name) values(?,?)`, [topicId, name]);
-        const cid = driver.select(`select last_insert_rowid() as id`)[0].id;
-        queue(`chunk:${cid}`, 'chunk', 'upsert', { id: cid, topic_id: topicId, name, created_at: Math.floor(Date.now()/1000) });
         await renderChunks(topicId);
 
       } else if (act === 'rename-chunk') {
         const [r] = driver.select(`select name,topic_id from chunks where id=?`, [id]);
         const name = prompt('Rename chunk', r?.name || ''); if (!name) return;
         driver.exec(`update chunks set name=? where id=?`, [name, id]);
-        queue(`chunk:${id}`, 'chunk', 'upsert', { id, topic_id: r.topic_id, name, created_at: Math.floor(Date.now()/1000) });
         await renderChunks(r.topic_id);
         if (details.scope === 'chunk' && details.id === id) setDetail('chunk', id, name);
 
@@ -573,8 +629,6 @@ if ('serviceWorker' in navigator) {
         if (!confirm('Delete this chunk & its notes?')) return;
         const [r] = driver.select(`select topic_id from chunks where id=?`, [id]);
         const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [id]).map(x=>x.id);
-        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-        queue(`chunk:${id}`, 'chunk', 'delete', null);
         for (const nid of noteIds) await deleteImageNoteCascade(nid);
         driver.exec(`delete from chunks where id=?`, [id]);
         await renderChunks(r.topic_id); setDetail(null, null, '');
@@ -594,8 +648,6 @@ if ('serviceWorker' in navigator) {
   const addSubject = () => {
     const name = (document.getElementById('newSubject').value || '').trim(); if (!name) return;
     driver.exec(`insert into subjects(name) values(?)`, [name]);
-    const sid = driver.select(`select last_insert_rowid() as id`)[0].id;
-    queue(`subject:${sid}`, 'subject', 'upsert', { id: sid, name, created_at: Math.floor(Date.now()/1000) });
     document.getElementById('newSubject').value = '';
     loadTree();
   };
@@ -610,12 +662,10 @@ if ('serviceWorker' in navigator) {
     if (details.scope === 'topic') {
       const [r] = driver.select(`select subject_id from topics where id=?`, [details.id]);
       driver.exec(`update topics set name=? where id=?`, [name, details.id]);
-      queue(`topic:${details.id}`, 'topic', 'upsert', { id: details.id, subject_id: r.subject_id, name, created_at: Math.floor(Date.now()/1000) });
       renderTopics(r.subject_id);
     } else if (details.scope === 'chunk') {
       const [r] = driver.select(`select topic_id from chunks where id=?`, [details.id]);
       driver.exec(`update chunks set name=? where id=?`, [name, details.id]);
-      queue(`chunk:${details.id}`, 'chunk', 'upsert', { id: details.id, topic_id: r.topic_id, name, created_at: Math.floor(Date.now()/1000) });
       renderChunks(r.topic_id);
     }
     setDetail(details.scope, details.id, name);
@@ -626,24 +676,19 @@ if ('serviceWorker' in navigator) {
     if (!confirm(`Delete this ${details.scope} and its notes?`)) return;
     if (details.scope === 'topic') {
       const [r] = driver.select(`select subject_id from topics where id=?`, [details.id]);
-      const chunkIds = driver.select(`select id from chunks where topic_id=?`, [details.id]).map(x=>x.id);
       const noteIds = driver.select(`
         select n.id from notes n
         where (n.scope='topic' and n.scope_id=?)
            or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
       `, [details.id, details.id]).map(x=>x.id);
-      for (const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
-      for (const cid of chunkIds) queue(`chunk:${cid}`,'chunk','delete',null);
-      queue(`topic:${details.id}`,'topic','delete',null);
       for (const nid of noteIds) await deleteImageNoteCascade(nid);
+      driver.exec(`delete from chunks where topic_id=?`, [details.id]);
       driver.exec(`delete from topics where id=?`, [details.id]);
       collapsed.topics.delete(details.id); saveCollapse();
       await loadTree(); setDetail(null,null,'');
     } else if (details.scope === 'chunk') {
       const [r] = driver.select(`select topic_id from chunks where id=?`, [details.id]);
       const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [details.id]).map(x=>x.id);
-      for (const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
-      queue(`chunk:${details.id}`,'chunk','delete',null);
       for (const nid of noteIds) await deleteImageNoteCascade(nid);
       driver.exec(`delete from chunks where id=?`, [details.id]);
       await renderChunks(r.topic_id); setDetail(null,null,'');
@@ -668,11 +713,6 @@ if ('serviceWorker' in navigator) {
     if (!url) return alert('Add a valid URL');
     driver.exec(`insert into notes(scope,scope_id,kind,title,url) values(?,?,?,?,?)`,
       [details.scope, details.id, 'pdf', title, url]);
-    const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
-    queue(`note:${nid}`, 'note', 'upsert', {
-      id:nid, scope:details.scope, scope_id:details.id,
-      kind:'pdf', title, url, created_at:Math.floor(Date.now()/1000)
-    });
     document.getElementById('pdfTitle').value='';
     document.getElementById('pdfUrl').value='';
     loadNotes();
@@ -689,19 +729,13 @@ if ('serviceWorker' in navigator) {
         [details.scope, details.id, 'image', f.name, previewPath]);
       const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
       driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid, 1, previewPath]);
-      queue(`note:${nid}`, 'note', 'upsert', {
-        id:nid, scope:details.scope, scope_id:details.id,
-        kind:'image', title:f.name, path:previewPath, created_at:Math.floor(Date.now()/1000)
-      });
     }
     e.target.value = '';
     loadNotes();
   });
 
   async function loadNotes(){
-    // Clean previous object URLs
     clearNoteBlobURLs();
-
     imageList.innerHTML = '';
     pdfList.innerHTML   = '';
 
@@ -789,16 +823,8 @@ if ('serviceWorker' in navigator) {
       await writeBlob(path, f);
       driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId, next++, path]);
     }
-    const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
-    if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
     fi.value = '';
     loadNotes();
-  });
-
-  imageList.addEventListener('keydown', (e)=>{
-    if (e.target.classList.contains('chunk-pill')) {
-      clickViaKeys(e, t => t);
-    }
   });
 
   imageList.addEventListener('click', async (e)=>{
@@ -809,11 +835,8 @@ if ('serviceWorker' in navigator) {
       if (btn.dataset.act === 'save-cap') {
         const cap = noteCard.querySelector('input.cap').value;
         driver.exec(`update notes set title=? where id=?`, [cap, id]);
-        const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
-        if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
       } else if (btn.dataset.act === 'del-imgnote') {
         if (!confirm('Delete this image note (and all its pages)?')) return;
-        queue(`note:${id}`, 'note', 'delete', null);
         await deleteImageNoteCascade(id);
         loadNotes();
       }
@@ -825,35 +848,6 @@ if ('serviceWorker' in navigator) {
     }
     if (e.target.matches('img.preview')) {
       openLightboxForNote(Number(noteCard.dataset.noteid), 1);
-    }
-  });
-
-  pdfList.addEventListener('click', async (e)=>{
-    const b = e.target.closest('button'); 
-    const link = e.target.closest('a.link');
-    if (link) {
-      e.preventDefault();
-      const card = link.closest('.card');
-      const title = (card.querySelector('.pdftitle')?.value || 'PDF').trim();
-      const url = (card.querySelector('.pdfurl')?.value || link.getAttribute('href') || '').trim();
-      if (!url) return;
-      openPdfInModal(title, url);
-      return;
-    }
-    if (!b) return;
-    const id = Number(b.dataset.id);
-    if (b.dataset.act === 'save-pdf') {
-      const card  = b.closest('.card');
-      const title = card.querySelector('.pdftitle').value;
-      const url   = card.querySelector('.pdfurl').value;
-      driver.exec(`update notes set title=?, url=? where id=?`, [title, url, id]);
-      const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
-      if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
-    } else if (b.dataset.act === 'del-pdf') {
-      if (!confirm('Delete PDF link?')) return;
-      queue(`note:${id}`, 'note', 'delete', null);
-      driver.exec(`delete from notes where id=?`, [id]);
-      loadNotes();
     }
   });
 
@@ -948,19 +942,16 @@ if ('serviceWorker' in navigator) {
     const id = extractDriveId(urlOrId);
     if (!id) return urlOrId;
 
-    // iOS Safari workaround: prefer direct Drive v3 (bypass SW + referrer weirdness)
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
     const v3 = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&key=${encodeURIComponent(DRIVE_API_KEY)}`;
     if (isIOS) return v3;
 
-    // Prefer the SW endpoint (range-friendly, same-origin) if it responds
     const swSrc = `/drivepdf/${id}`;
     try {
       const probe = await fetch(swSrc, { headers: { Range: 'bytes=0-0' } });
       if (probe.ok) return swSrc;
     } catch (_) {}
 
-    // Fallback: direct Drive v3
     return v3;
   }
 
@@ -1010,7 +1001,7 @@ if ('serviceWorker' in navigator) {
           const page = await pdf.getPage(n);
           const vp = page.getViewport({ scale: SCALE });
           const canvas = el.querySelector('canvas');
-          const ctx = canvas.getContext('2d', { willReadFrequently: false });
+          const ctx = canvas.getContext('2d');
           const ratio = Math.min(2, devicePixelRatio || 1);
           canvas.width  = Math.floor(vp.width * ratio);
           canvas.height = Math.floor(vp.height * ratio);
@@ -1062,114 +1053,67 @@ if ('serviceWorker' in navigator) {
     appendBatch(0);
   }
 
-  // Intercept PDF "Open" to use the modal viewer (handled in pdfList click handler above)
+  /* ---------- CouchDB: Sync now (push), including IMAGE ATTACHMENTS ---------- */
 
-  /* ---------- CouchDB Sync (Save/Test/Sync + Pull) ---------- */
-  const couchCfgKey = 'couchCfg-techstudy';
-  const couchMsgEl  = document.getElementById('couchMsg');
+  // helpers for attachment naming/types
+  const extFromType = (t='') => t.includes('png')?'png':t.includes('webp')?'webp':t.includes('gif')?'gif':'jpg';
+  const extFromPath = (p='') => ((p.split('.').pop()||'').toLowerCase()||'jpg');
+  const headAttName = () => 'head';             // no extension needed
+  const pageAttName = (n) => `page-${n}`;       // no extension needed
 
-  const couch = {
-    cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
-    save(){ 
-      const { url, db, user, pass } = this.cfg || {};
-      localStorage.setItem(couchCfgKey, JSON.stringify({ url, db, user, ...(pass?{pass}: {}) })); 
-    },
-    base(){
-      if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
-      return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
-    },
-    authHeader(){
-      if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
-      return null;
-    },
-    async ensureDb(){
-      const r = await fetch(this.base(), {
-        method: 'GET',
-        headers: this.authHeader() ? { Authorization: this.authHeader() } : {},
-        credentials: 'include'
-      });
-      if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
-      if (!r.ok) throw new Error(await r.text());
-      return r.json().catch(()=>null);
-    },
-    async fetchJson(path, opts = {}){
-      const headers = Object.assign(
-        { 'Accept': 'application/json' },
-        opts.headers || {},
-        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
-      );
-      const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
+  async function pushAllDocuments(){
+    await couch.ensureDb();
+
+    // subjects/topics/chunks/notes (metadata only)
+    for (const s of driver.select(`select id,name,created_at from subjects`)) {
+      await couch.upsertDoc(`subject:${s.id}`, { type:'subject', ...s });
     }
-  };
-
-  // Prefill sensible defaults once
-  if (!couch.cfg.url && !couch.cfg.db) {
-    couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
-    couch.save();
-  }
-  // hydrate form on load
-  (function hydrateCouchForm(){
-    document.getElementById('couchUrl').value  = couch.cfg.url  || '';
-    document.getElementById('couchDb').value   = couch.cfg.db   || '';
-    document.getElementById('couchUser').value = couch.cfg.user || '';
-    document.getElementById('couchPass').value = '';
-  })();
-
-  document.getElementById('couchSave').addEventListener('click', ()=>{
-    couch.cfg.url  = document.getElementById('couchUrl').value.trim();
-    couch.cfg.db   = document.getElementById('couchDb').value.trim();
-    couch.cfg.user = document.getElementById('couchUser').value.trim();
-    const pw       = document.getElementById('couchPass').value;
-    if (pw) couch.cfg.pass = pw;
-    couch.save();
-    couchMsgEl.textContent = 'Saved Couch settings.';
-  });
-
-  document.getElementById('couchTest').addEventListener('click', async ()=>{
-    try {
-      const info = (await couch.ensureDb()) || (await couch.fetchJson(''));
-      couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`;
-    } catch (err) {
-      couchMsgEl.textContent = 'Test failed: ' + err.message;
+    for (const t of driver.select(`select id,subject_id,name,created_at from topics`)) {
+      await couch.upsertDoc(`topic:${t.id}`, { type:'topic', ...t });
     }
-  });
+    for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)) {
+      await couch.upsertDoc(`chunk:${c.id}`, { type:'chunk', ...c });
+    }
+    for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)) {
+      await couch.upsertDoc(`note:${n.id}`, { type:'note', ...n });
+    }
 
-  /* --- Helper: CouchDB upsert with _rev to avoid conflicts --- */
-  async function upsertDoc(docId, body) {
-    let rev = null;
-    try {
-      const existing = await couch.fetchJson('/' + encodeURIComponent(docId), { method: 'GET' });
-      rev = existing._rev || null;
-    } catch (_) { /* 404 is fine */ }
-    const payload = rev ? { _id: docId, _rev: rev, ...body } : { _id: docId, ...body };
-    return couch.fetchJson('/' + encodeURIComponent(docId), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    // IMAGES → upload blobs as attachments on their note docs
+    const imageNotes = driver.select(`select id,path from notes where kind='image'`);
+    for (const n of imageNotes) {
+      const docId = `note:${n.id}`;
+      let doc;
+      try { doc = await couch.getDoc(docId); } catch { continue; }
+      let rev = doc._rev;
+
+      // Head image (page 1)
+      try {
+        const headBlob = await readFile(n.path);
+        if (headBlob && headBlob.size) {
+          const put = await couch.putAttachment(docId, headAttName(), headBlob, rev);
+          rev = put.rev || rev;
+        }
+      } catch (_) {}
+
+      // Additional pages
+      const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [n.id]);
+      for (const p of pages) {
+        if (p.page === 1 && p.path === n.path) continue; // already uploaded as head
+        try {
+          const b = await readFile(p.path);
+          if (b && b.size) {
+            const put = await couch.putAttachment(docId, pageAttName(p.page), b, rev);
+            rev = put.rev || rev;
+          }
+        } catch (_) {}
+      }
+    }
   }
 
-  // “Sync now” (push all local docs to CouchDB) — conflict-safe
   document.getElementById('couchSync').addEventListener('click', async ()=>{
     try{
       couchMsgEl.textContent = 'Syncing…';
-      await couch.ensureDb();
-
-      for (const s of driver.select(`select id,name,created_at from subjects`)) {
-        await upsertDoc(`subject:${s.id}`, { type:'subject', ...s });
-      }
-      for (const t of driver.select(`select id,subject_id,name,created_at from topics`)) {
-        await upsertDoc(`topic:${t.id}`, { type:'topic', ...t });
-      }
-      for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)) {
-        await upsertDoc(`chunk:${c.id}`, { type:'chunk', ...c });
-      }
-      for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)) {
-        await upsertDoc(`note:${n.id}`, { type:'note', ...n });
-      }
-
+      await pushAllDocuments();
       const info = await couch.fetchJson('');
       couchMsgEl.textContent = `Sync done. Docs: ${info.doc_count}`;
     }catch(err){
@@ -1177,85 +1121,116 @@ if ('serviceWorker' in navigator) {
     }
   });
 
-  // “Pull now” (refreshes from _all_docs; simple merge)
-  // “Pull now” — fetch all docs and apply in FK-safe order
-document.getElementById('couchPull').addEventListener('click', async ()=>{
-  try{
-    await couch.ensureDb();
-    const all = await couch.fetchJson('/_all_docs?include_docs=true');
+  /* ---------- CouchDB: Pull now (FK-safe) + fetch IMAGE ATTACHMENTS ---------- */
+  document.getElementById('couchPull').addEventListener('click', async ()=>{
+    try{
+      await couch.ensureDb();
+      const all = await couch.fetchJson('/_all_docs?include_docs=true');
 
-    // Bucket docs by type
-    const buckets = { subject: [], topic: [], chunk: [], note: [] };
-    for (const row of all.rows) {
-      const d = row.doc;
-      if (!d || d._deleted || !d.type || !(d.type in buckets)) continue;
-      buckets[d.type].push(d);
+      // Bucket docs by type
+      const buckets = { subject: [], topic: [], chunk: [], note: [] };
+      for (const row of all.rows) {
+        const d = row.doc;
+        if (!d || d._deleted || !d.type || !(d.type in buckets)) continue;
+        buckets[d.type].push(d);
+      }
+
+      const numId = (d) => {
+        const asNum = Number(d.id);
+        if (Number.isFinite(asNum) && asNum > 0) return asNum;
+        const m = String(d._id||'').match(/^(subject|topic|chunk|note):(\d+)$/);
+        if (m) return Number(m[2]);
+        throw new Error(`Bad id on ${d.type} ${d._id||''}`);
+      };
+      const now = () => Math.floor(Date.now()/1000);
+
+      // Merge metadata first
+      driver.exec('BEGIN');
+      try {
+        for (const s of buckets.subject) {
+          const id = numId(s);
+          driver.exec(
+            `insert into subjects(id,name,created_at) values(?,?,?)
+             on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
+            [id, s.name||'', s.created_at||now()]
+          );
+        }
+        for (const t of buckets.topic) {
+          const id = numId(t);
+          driver.exec(
+            `insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
+             on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
+            [id, Number(t.subject_id)||0, t.name||'', t.created_at||now()]
+          );
+        }
+        for (const c of buckets.chunk) {
+          const id = numId(c);
+          driver.exec(
+            `insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
+             on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
+            [id, Number(c.topic_id)||0, c.name||'', c.created_at||now()]
+          );
+        }
+        for (const n of buckets.note) {
+          const id = numId(n);
+          driver.exec(
+            `insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
+             values(?,?,?,?,?,?,?,?)
+             on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
+                                     title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
+            [id, n.scope||'chunk', Number(n.scope_id)||0, n.kind||'image',
+             n.title||'', n.path||'', n.url||'', n.created_at||now()]
+          );
+        }
+        driver.exec('COMMIT');
+      } catch (e) { driver.exec('ROLLBACK'); throw e; }
+
+      // Download IMAGE attachments (so "Missing image" disappears)
+      const imgNotes = buckets.note.filter(d => d.kind === 'image');
+      for (const doc of imgNotes) {
+        const noteId = numId(doc);
+        const attMap = (doc._attachments && typeof doc._attachments === 'object') ? doc._attachments : null;
+        if (!attMap) continue;
+
+        // 1) head → write to notes.path
+        try {
+          const headKey = Object.keys(attMap).find(k => k === 'head' || k.startsWith('head.'));
+          if (headKey && doc.path) {
+            const headBlob = await couch.getAttachment(doc._id, headKey);
+            await writeBlob(doc.path, headBlob);
+            // Ensure at least page 1 exists for UX (thumbs)
+            const hasP1 = driver.select(`select 1 as x from image_pages where note_id=? and page=1`, [noteId]).length > 0;
+            if (!hasP1) {
+              driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)
+                           on conflict(note_id,page) do update set path=excluded.path`, [noteId, 1, doc.path]);
+            }
+          }
+        } catch (e) { console.warn('head fetch failed', doc._id, e); }
+
+        // 2) pages → add/overwrite local blobs + ensure rows exist
+        for (const key of Object.keys(attMap)) {
+          const m = key.match(/^page-(\d+)(?:\.[^.]*)?$/);
+          if (!m) continue;
+          const pageNo = Number(m[1]);
+          try {
+            const blob = await couch.getAttachment(doc._id, key);
+            const ext  = extFromType(blob.type);
+            const pagePath = `/images/n${noteId}/page-${pageNo}.${ext}`;
+            await writeBlob(pagePath, blob);
+            driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)
+                         on conflict(note_id,page) do update set path=excluded.path`, [noteId, pageNo, pagePath]);
+          } catch (e) { console.warn('page fetch failed', doc._id, key, e); }
+        }
+      }
+
+      couchMsgEl.textContent = 'Pulled changes.';
+      loadTree();
+      if (details.scope) loadNotes();
+    }catch(err){
+      couchMsgEl.textContent = 'Pull failed: ' + err.message;
     }
+  });
 
-    // Helper: numeric id (fallback from _id like "topic:12")
-    const numId = (d) => {
-      const asNum = Number(d.id);
-      if (Number.isFinite(asNum) && asNum > 0) return asNum;
-      const m = String(d._id||'').match(/^(subject|topic|chunk|note):(\d+)$/);
-      if (m) return Number(m[2]);
-      throw new Error(`Bad id on ${d.type} ${d._id||''}`);
-    };
-    const now = () => Math.floor(Date.now()/1000);
-
-    // Transaction
-    driver.exec('BEGIN');
-    try {
-      // 1) subjects
-      for (const s of buckets.subject) {
-        const id = numId(s);
-        driver.exec(
-          `insert into subjects(id,name,created_at) values(?,?,?)
-           on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
-          [id, s.name||'', s.created_at||now()]
-        );
-      }
-      // 2) topics
-      for (const t of buckets.topic) {
-        const id = numId(t);
-        driver.exec(
-          `insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
-           on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
-          [id, Number(t.subject_id)||0, t.name||'', t.created_at||now()]
-        );
-      }
-      // 3) chunks
-      for (const c of buckets.chunk) {
-        const id = numId(c);
-        driver.exec(
-          `insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
-           on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
-          [id, Number(c.topic_id)||0, c.name||'', c.created_at||now()]
-        );
-      }
-      // 4) notes
-      for (const n of buckets.note) {
-        const id = numId(n);
-        driver.exec(
-          `insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
-           values(?,?,?,?,?,?,?,?)
-           on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
-                                   title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
-          [id, n.scope||'chunk', Number(n.scope_id)||0, n.kind||'image',
-           n.title||'', n.path||'', n.url||'', n.created_at||now()]
-        );
-      }
-
-      driver.exec('COMMIT');
-    } catch (e) {
-      driver.exec('ROLLBACK'); throw e;
-    }
-
-    couchMsgEl.textContent = 'Pulled changes.';
-    loadTree();
-  } catch (err) {
-    couchMsgEl.textContent = 'Pull failed: ' + err.message;
-  }
-});
   /* init */
   setStatus('DB: OK (IndexedDB)');
   loadTree();
