@@ -54,7 +54,7 @@ a.link{color:#8fb5ff;text-decoration:none}
 .lightbox .stack img{max-width:95vw; height:auto; display:block; border-radius:8px}
 .lightbox.zoomed .stack{ transform:scale(var(--z,1)); }
 
-/* === PDF Viewer Modal (new) === */
+/* === PDF Viewer Modal === */
 #pdfModal{position:fixed;inset:0;background:#000a;backdrop-filter:blur(2px);display:none;z-index:9998}
 #pdfBox{position:absolute;inset:40px 20px 20px 20px;background:#0f1117;border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
 #pdfHdr{padding:8px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
@@ -124,7 +124,7 @@ a.link{color:#8fb5ff;text-decoration:none}
           <div class="row">
             <label class="filelabel" for="imgInput">+ Add images</label>
             <input id="imgInput" type="file" accept="image/*" multiple/>
-            <span class="small">Images are stored privately in IndexedDB</span>
+            <span class="small">Images are stored privately in IndexedDB, and synced to CouchDB as attachments.</span>
           </div>
           <div id="imageList" class="scroll-x"></div>
         </div>
@@ -355,7 +355,7 @@ if ('serviceWorker' in navigator) {
     localStorage.setItem('coll-topics',   JSON.stringify([...collapsed.topics]));
   };
 
-  /* ---------- SYNC helpers ---------- */
+  /* ---------- SYNC helpers (docs + attachments) ---------- */
   function queue(doc_id, doc_type, action, obj){
     driver.exec(`insert into sync_outbox(doc_id,doc_type,action,payload) values(?,?,?,?)`,
       [doc_id, doc_type, action, obj?JSON.stringify(obj):null]);
@@ -375,6 +375,145 @@ if ('serviceWorker' in navigator) {
   function setSince(v){
     driver.exec(`insert into sync_checkpoints(key,value) values('since',?)
                  on conflict(key) do update set value=excluded.value`, [v]);
+  }
+
+  /* ---------- Couch helpers ---------- */
+  const couchCfgKey = 'couchCfg-techstudy';
+  const couchMsgEl  = document.getElementById('couchMsg');
+
+  const couch = {
+    cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
+    save(){ 
+      const { url, db, user, pass } = this.cfg || {};
+      localStorage.setItem(couchCfgKey, JSON.stringify({ url, db, user, ...(pass?{pass}: {}) })); 
+    },
+    base(){
+      if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
+      return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
+    },
+    authHeader(){
+      if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
+      return null;
+    },
+    async ensureDb(){
+      const r = await fetch(this.base(), {
+        method: 'GET',
+        headers: this.authHeader() ? { Authorization: this.authHeader() } : {},
+        credentials: 'include'
+      });
+      if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
+      if (!r.ok) throw new Error(await r.text());
+      return r.json().catch(()=>null);
+    },
+    async fetchJson(path, opts = {}){
+      const headers = Object.assign(
+        { 'Accept': 'application/json' },
+        opts.headers || {},
+        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
+      );
+      const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    async fetchRaw(path, opts = {}) {
+      const headers = Object.assign(
+        {},
+        opts.headers || {},
+        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
+      );
+      return fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
+    }
+  };
+
+  // Prefill sensible defaults once
+  if (!couch.cfg.url && !couch.cfg.db) {
+    couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
+    couch.save();
+  }
+  // hydrate form on load
+  (function hydrateCouchForm(){
+    document.getElementById('couchUrl').value  = couch.cfg.url  || '';
+    document.getElementById('couchDb').value   = couch.cfg.db   || '';
+    document.getElementById('couchUser').value = couch.cfg.user || '';
+    document.getElementById('couchPass').value = '';
+  })();
+
+  document.getElementById('couchSave').addEventListener('click', ()=>{
+    couch.cfg.url  = document.getElementById('couchUrl').value.trim();
+    couch.cfg.db   = document.getElementById('couchDb').value.trim();
+    couch.cfg.user = document.getElementById('couchUser').value.trim();
+    const pw       = document.getElementById('couchPass').value;
+    if (pw) couch.cfg.pass = pw;
+    couch.save();
+    couchMsgEl.textContent = 'Saved Couch settings.';
+  });
+
+  document.getElementById('couchTest').addEventListener('click', async ()=>{
+    try {
+      const info = (await couch.ensureDb()) || (await couch.fetchJson(''));
+      couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`;
+    } catch (err) {
+      couchMsgEl.textContent = 'Test failed: ' + err.message;
+    }
+  });
+
+  /* --- Helper: CouchDB upsert with _rev to avoid conflicts --- */
+  async function upsertDoc(docId, body) {
+    let rev = null;
+    try {
+      const existing = await couch.fetchJson('/' + encodeURIComponent(docId), { method: 'GET' });
+      rev = existing._rev || null;
+    } catch (_) { /* 404 is fine */ }
+    const payload = rev ? { _id: docId, _rev: rev, ...body } : { _id: docId, ...body };
+    const res = await couch.fetchJson('/' + encodeURIComponent(docId), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.rev) setRev(docId, res.rev);
+    return res;
+  }
+
+  /* --- Attachments helpers (images) --- */
+  const attachmentName = (path) => (path||'').replace(/^\//,''); // '/a/b.png' -> 'a/b.png'
+
+  async function putAttachment(docId, name, blob, type='application/octet-stream'){
+    await couch.ensureDb();
+    // Ensure doc exists
+    let rev = getRev(docId);
+    if (!rev) {
+      try {
+        const idNum = Number(String(docId).split(':')[1]||0);
+        const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [idNum])[0];
+        if (n) {
+          const up = await upsertDoc(docId, { type:'note', ...n });
+          rev = up.rev || null;
+        }
+      } catch(_) {}
+    }
+    // Get latest rev
+    if (!rev) {
+      try {
+        const got = await couch.fetchJson('/' + encodeURIComponent(docId), { method: 'GET' });
+        rev = got._rev || null;
+      } catch(_) {}
+    }
+    const url = '/' + encodeURIComponent(docId) + '/' + encodeURIComponent(name) + (rev ? ('?rev=' + encodeURIComponent(rev)) : '');
+    const res = await couch.fetchRaw(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': type },
+      body: blob
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const j = await res.json();
+    if (j.rev) setRev(docId, j.rev);
+    return j;
+  }
+
+  async function downloadAttachment(docId, name){
+    const res = await couch.fetchRaw('/' + encodeURIComponent(docId) + '/' + encodeURIComponent(name), { method:'GET' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.blob();
   }
 
   /* ---------- UI refs ---------- */
@@ -469,7 +608,6 @@ if ('serviceWorker' in navigator) {
 
   /* ---------- left pane actions + QUEUE ---------- */
   subjectsEl.addEventListener('keydown', (e)=>{
-    // keyboard "click" for focusable headings/pills
     clickViaKeys(e, t => t.closest('[data-act]') || (t.classList.contains('chunk-pill') ? t : null));
   });
 
@@ -678,30 +816,39 @@ if ('serviceWorker' in navigator) {
     loadNotes();
   });
 
+  /* --- Add image (page 1) and upload as attachment --- */
   document.getElementById('imgInput').addEventListener('change', async (e)=>{
     if (!details.scope) return;
     for (const f of [...e.target.files]) {
       const ext = (f.name.split('.').pop()||'png').toLowerCase();
-      const id  = crypto.randomUUID();
-      const previewPath = `/images/${details.scope}/${details.id}/${id}.${ext}`;
-      await writeBlob(previewPath, f);
+      const title = f.name;
+
+      // 1) create note first to get ID
       driver.exec(`insert into notes(scope,scope_id,kind,title,path) values(?,?,?,?,?)`,
-        [details.scope, details.id, 'image', f.name, previewPath]);
+        [details.scope, details.id, 'image', title, '']);
       const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
-      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid, 1, previewPath]);
-      queue(`note:${nid}`, 'note', 'upsert', {
-        id:nid, scope:details.scope, scope_id:details.id,
-        kind:'image', title:f.name, path:previewPath, created_at:Math.floor(Date.now()/1000)
-      });
+
+      // 2) deterministic path + store to IDB
+      const headPath = `/images/n${nid}/p1.${ext}`;
+      await writeBlob(headPath, f);
+
+      // 3) update DB rows
+      driver.exec(`update notes set path=? where id=?`, [headPath, nid]);
+      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid, 1, headPath]);
+
+      // 4) queue + try pushing attachment
+      const nrow = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [nid])[0];
+      queue(`note:${nid}`, 'note', 'upsert', nrow);
+      try {
+        await putAttachment(`note:${nid}`, attachmentName(headPath), f, f.type || `image/${ext}`);
+      } catch(err){ console.warn('attach p1 failed', err); }
     }
     e.target.value = '';
     loadNotes();
   });
 
   async function loadNotes(){
-    // Clean previous object URLs
     clearNoteBlobURLs();
-
     imageList.innerHTML = '';
     pdfList.innerHTML   = '';
 
@@ -777,6 +924,7 @@ if ('serviceWorker' in navigator) {
     }
   }
 
+  /* --- Add extra pages (and upload) --- */
   imageList.addEventListener('change', async (e)=>{
     const fi = e.target.closest('input[type=file][data-act="add-pages"]');
     if (!fi) return;
@@ -784,21 +932,18 @@ if ('serviceWorker' in navigator) {
     let next = driver.select(`select coalesce(max(page),0)+1 as n from image_pages where note_id=?`, [noteId])[0].n;
     for (const f of [...fi.files]) {
       const ext  = (f.name.split('.').pop()||'png').toLowerCase();
-      const id   = crypto.randomUUID();
-      const path = `/images/n${noteId}/${id}.${ext}`;
+      const path = `/images/n${noteId}/p${next}.${ext}`;
       await writeBlob(path, f);
-      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId, next++, path]);
+      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId, next, path]);
+      try {
+        await putAttachment(`note:${noteId}`, attachmentName(path), f, f.type || `image/${ext}`);
+      } catch(err){ console.warn('attach p'+next+' failed', err); }
+      next++;
     }
     const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
     if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
     fi.value = '';
     loadNotes();
-  });
-
-  imageList.addEventListener('keydown', (e)=>{
-    if (e.target.classList.contains('chunk-pill')) {
-      clickViaKeys(e, t => t);
-    }
   });
 
   imageList.addEventListener('click', async (e)=>{
@@ -836,16 +981,13 @@ if ('serviceWorker' in navigator) {
     if (!url) return;
     openPdfInModal(title, url);
   }
-
   ['pointerdown','touchstart','click'].forEach(type=>{
     pdfList.addEventListener(type, (e)=>{
       const link = e.target.closest('a.link[data-open]');
       if (!link) return;
       e.preventDefault();
       e.stopPropagation();
-      // act early on touch/pointer to beat Safari navigation
-      if (type !== 'click') openPdfFrom(link);
-      else openPdfFrom(link);
+      openPdfFrom(link);
     }, { passive:false });
   });
 
@@ -960,19 +1102,17 @@ if ('serviceWorker' in navigator) {
     const id = extractDriveId(urlOrId);
     if (!id) return urlOrId;
 
-    // iOS Safari workaround: prefer direct Drive v3 (bypass SW + referrer weirdness)
+    // iOS Safari workaround
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
     const v3 = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&key=${encodeURIComponent(DRIVE_API_KEY)}`;
     if (isIOS) return v3;
 
-    // Prefer the SW endpoint (range-friendly, same-origin) if it responds
     const swSrc = `/drivepdf/${id}`;
     try {
       const probe = await fetch(swSrc, { headers: { Range: 'bytes=0-0' } });
       if (probe.ok) return swSrc;
     } catch (_) {}
 
-    // Fallback: direct Drive v3
     return v3;
   }
 
@@ -1074,101 +1214,13 @@ if ('serviceWorker' in navigator) {
     appendBatch(0);
   }
 
-  // Intercept PDF "Open" to use the modal viewer (handled above)
-
-  /* ---------- CouchDB Sync (Save/Test/Sync + Pull) ---------- */
-  const couchCfgKey = 'couchCfg-techstudy';
-  const couchMsgEl  = document.getElementById('couchMsg');
-
-  const couch = {
-    cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
-    save(){ 
-      const { url, db, user, pass } = this.cfg || {};
-      localStorage.setItem(couchCfgKey, JSON.stringify({ url, db, user, ...(pass?{pass}: {}) })); 
-    },
-    base(){
-      if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
-      return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
-    },
-    authHeader(){
-      if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
-      return null;
-    },
-    async ensureDb(){
-      const r = await fetch(this.base(), {
-        method: 'GET',
-        headers: this.authHeader() ? { Authorization: this.authHeader() } : {},
-        credentials: 'include'
-      });
-      if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
-      if (!r.ok) throw new Error(await r.text());
-      return r.json().catch(()=>null);
-    },
-    async fetchJson(path, opts = {}){
-      const headers = Object.assign(
-        { 'Accept': 'application/json' },
-        opts.headers || {},
-        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
-      );
-      const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    }
-  };
-
-  // Prefill sensible defaults once
-  if (!couch.cfg.url && !couch.cfg.db) {
-    couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
-    couch.save();
-  }
-  // hydrate form on load
-  (function hydrateCouchForm(){
-    document.getElementById('couchUrl').value  = couch.cfg.url  || '';
-    document.getElementById('couchDb').value   = couch.cfg.db   || '';
-    document.getElementById('couchUser').value = couch.cfg.user || '';
-    document.getElementById('couchPass').value = '';
-  })();
-
-  document.getElementById('couchSave').addEventListener('click', ()=>{
-    couch.cfg.url  = document.getElementById('couchUrl').value.trim();
-    couch.cfg.db   = document.getElementById('couchDb').value.trim();
-    couch.cfg.user = document.getElementById('couchUser').value.trim();
-    const pw       = document.getElementById('couchPass').value;
-    if (pw) couch.cfg.pass = pw;
-    couch.save();
-    couchMsgEl.textContent = 'Saved Couch settings.';
-  });
-
-  document.getElementById('couchTest').addEventListener('click', async ()=>{
-    try {
-      const info = (await couch.ensureDb()) || (await couch.fetchJson(''));
-      couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`;
-    } catch (err) {
-      couchMsgEl.textContent = 'Test failed: ' + err.message;
-    }
-  });
-
-  /* --- Helper: CouchDB upsert with _rev to avoid conflicts --- */
-  async function upsertDoc(docId, body) {
-    let rev = null;
-    try {
-      const existing = await couch.fetchJson('/' + encodeURIComponent(docId), { method: 'GET' });
-      rev = existing._rev || null;
-    } catch (_) { /* 404 is fine */ }
-    const payload = rev ? { _id: docId, _rev: rev, ...body } : { _id: docId, ...body };
-    return couch.fetchJson('/' + encodeURIComponent(docId), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  }
-
-  // “Sync now” (push all local docs to CouchDB) — conflict-safe
+  /* ---------- CouchDB Sync buttons ---------- */
   document.getElementById('couchSync').addEventListener('click', async ()=>{
     try{
       couchMsgEl.textContent = 'Syncing…';
       await couch.ensureDb();
 
+      // Push docs
       for (const s of driver.select(`select id,name,created_at from subjects`)) {
         await upsertDoc(`subject:${s.id}`, { type:'subject', ...s });
       }
@@ -1182,6 +1234,27 @@ if ('serviceWorker' in navigator) {
         await upsertDoc(`note:${n.id}`, { type:'note', ...n });
       }
 
+      // Push image attachments (head + pages)
+      const imageNotes = driver.select(`select id,path from notes where kind='image'`);
+      for (const n of imageNotes) {
+        // head
+        if (n.path) {
+          const b = await readFile(n.path).catch(()=>null);
+          if (b) {
+            const ext = (n.path.split('.').pop()||'png').toLowerCase();
+            await putAttachment(`note:${n.id}`, attachmentName(n.path), b, `image/${ext}`);
+          }
+        }
+        // pages
+        const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [n.id]);
+        for (const p of pages) {
+          const b = await readFile(p.path).catch(()=>null);
+          if (!b) continue;
+          const ext = (p.path.split('.').pop()||'png').toLowerCase();
+          await putAttachment(`note:${n.id}`, attachmentName(p.path), b, `image/${ext}`);
+        }
+      }
+
       const info = await couch.fetchJson('');
       couchMsgEl.textContent = `Sync done. Docs: ${info.doc_count}`;
     }catch(err){
@@ -1189,7 +1262,7 @@ if ('serviceWorker' in navigator) {
     }
   });
 
-  // “Pull now” — fetch all docs and apply in FK-safe order
+  // “Pull now” — fetch docs, merge, then fetch image attachments into IndexedDB
   document.getElementById('couchPull').addEventListener('click', async ()=>{
     try{
       await couch.ensureDb();
@@ -1213,10 +1286,9 @@ if ('serviceWorker' in navigator) {
       };
       const now = () => Math.floor(Date.now()/1000);
 
-      // Transaction
+      // Transaction for docs
       driver.exec('BEGIN');
       try {
-        // 1) subjects
         for (const s of buckets.subject) {
           const id = numId(s);
           driver.exec(
@@ -1225,7 +1297,6 @@ if ('serviceWorker' in navigator) {
             [id, s.name||'', s.created_at||now()]
           );
         }
-        // 2) topics
         for (const t of buckets.topic) {
           const id = numId(t);
           driver.exec(
@@ -1234,7 +1305,6 @@ if ('serviceWorker' in navigator) {
             [id, Number(t.subject_id)||0, t.name||'', t.created_at||now()]
           );
         }
-        // 3) chunks
         for (const c of buckets.chunk) {
           const id = numId(c);
           driver.exec(
@@ -1243,7 +1313,6 @@ if ('serviceWorker' in navigator) {
             [id, Number(c.topic_id)||0, c.name||'', c.created_at||now()]
           );
         }
-        // 4) notes
         for (const n of buckets.note) {
           const id = numId(n);
           driver.exec(
@@ -1255,10 +1324,34 @@ if ('serviceWorker' in navigator) {
              n.title||'', n.path||'', n.url||'', n.created_at||now()]
           );
         }
-
         driver.exec('COMMIT');
       } catch (e) {
         driver.exec('ROLLBACK'); throw e;
+      }
+
+      // Pull image attachments → IndexedDB, and (re)create image_pages
+      for (const n of buckets.note) {
+        if (n.kind !== 'image' || !n._attachments) continue;
+        const noteId = numId(n);
+        for (const name in n._attachments) {
+          const path = '/' + name;
+          const have = await readFile(path).catch(()=>null);
+          if (!have) {
+            try {
+              const blob = await downloadAttachment(n._id || `note:${noteId}`, name);
+              await writeBlob(path, blob);
+            } catch (err) { console.warn('download attach failed', n._id, name, err); }
+          }
+          // Upsert image_pages with page number parsed from name (p{num}.ext)
+          let page = 1;
+          const m = name.match(/p(\d+)\./i);
+          if (m) page = Number(m[1]);
+          driver.exec(
+            `insert into image_pages(note_id,page,path) values(?,?,?)
+             on conflict(note_id,page) do update set path=excluded.path`,
+            [noteId, page, path]
+          );
+        }
       }
 
       couchMsgEl.textContent = 'Pulled changes.';
