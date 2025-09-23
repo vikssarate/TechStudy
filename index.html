@@ -20,7 +20,7 @@ h1{font-size:18px;margin:0 0 12px}
 input[type=text],input[type=url],input[type=password]{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#0b1020;color:var(--ink)}
 button{padding:10px 14px;border:0;border-radius:14px;background:var(--accent);color:#081225;font-weight:600;cursor:pointer}
 button.ghost{background:#232a48;color:var(--ink)} button.warn{background:var(--bad);color:#200} button.slim{padding:6px 10px;border-radius:10px}
-button:focus-visible, .chunk-pill:focus-visible, h3[data-act]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:focus-visible,.chunk-pill:focus-visible,h3[data-act]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 hr{border:0;border-top:1px dashed var(--line);margin:12px 0}
 .subject{border:1px dashed var(--line);border-radius:12px;padding:12px;margin:10px 0}
 .subject>header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
@@ -46,17 +46,16 @@ a.link{color:#8fb5ff;text-decoration:none}
 .iconbtn{background:#232a48;color:var(--ink);border-radius:10px;padding:6px 10px}
 .icon{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 /* Lightbox */
-.lightbox{position:fixed; inset:0; background:rgba(0,0,0,.92); display:none; z-index:9999}
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;z-index:9999}
 .lightbox.show{display:block}
-.lightbox-close{position:fixed; top:10px; right:10px; background:#fff; border:0; border-radius:999px; width:36px; height:36px; font-weight:900; cursor:pointer; z-index:10001}
-.lightbox .viewport{position:absolute; inset:0; overflow:auto; -webkit-overflow-scrolling:touch; padding:16px; touch-action:auto; z-index:10000}
-.lightbox .stack{display:flex; flex-direction:column; gap:12px; transform-origin:top left}
-.lightbox .stack img{max-width:95vw; height:auto; display:block; border-radius:8px}
-.lightbox.zoomed .stack{ transform:scale(var(--z,1)); }
-
-/* === PDF Viewer Modal === */
+.lightbox-close{position:fixed;top:10px;right:10px;background:#fff;border:0;border-radius:999px;width:36px;height:36px;font-weight:900;cursor:pointer;z-index:10001}
+.lightbox .viewport{position:absolute;inset:0;overflow:auto;-webkit-overflow-scrolling:touch;padding:16px;touch-action:auto;z-index:10000}
+.lightbox .stack{display:flex;flex-direction:column;gap:12px;transform-origin:top left}
+.lightbox .stack img{max-width:95vw;height:auto;display:block;border-radius:8px}
+.lightbox.zoomed .stack{transform:scale(var(--z,1))}
+/* PDF modal */
 #pdfModal{position:fixed;inset:0;background:#000a;backdrop-filter:blur(2px);display:none;z-index:9998}
-#pdfBox{position:absolute;inset:40px 20px 20px 20px;background:#0f1117;border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+#pdfBox{position:absolute;inset:40px 20px 20px;background:#0f1117;border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
 #pdfHdr{padding:8px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
 #pdfHdr .title{color:var(--ink);font-weight:700}
 #pdfHdr .meta{margin-left:auto;color:var(--muted)}
@@ -81,14 +80,13 @@ a.link{color:#8fb5ff;text-decoration:none}
         <button id="addSubject">+ Subject</button>
       </div>
 
-      <!-- CouchDB panel -->
+      <!-- CouchDB -->
       <div class="subject" aria-labelledby="couchHdr">
         <header><h2 id="couchHdr" style="margin:0">CouchDB Sync</h2></header>
         <div class="row">
           <input id="couchUrl" type="url" placeholder="https://couch.techstudy.me" aria-label="CouchDB URL"/>
-          <input id="couchDb" type="text" placeholder="db name (engineering)" aria-label="CouchDB database name"/>
+          <input id="couchDb"  type="text" placeholder="db name (engineering)" aria-label="CouchDB database name"/>
         </div>
-        <!-- Hidden creds (DB is open). Remove style to show again. -->
         <div class="row" id="credsRow" style="display:none">
           <input id="couchUser" type="text" placeholder="user" aria-label="Username"/>
           <input id="couchPass" type="password" placeholder="password" aria-label="Password"/>
@@ -101,7 +99,6 @@ a.link{color:#8fb5ff;text-decoration:none}
         </div>
         <div class="small" id="couchMsg" role="status" aria-live="polite"></div>
       </div>
-      <!-- /CouchDB panel -->
 
       <div id="subjects"></div>
     </div>
@@ -143,7 +140,7 @@ a.link{color:#8fb5ff;text-decoration:none}
   </div>
 </div>
 
-<!-- Image Lightbox -->
+<!-- Lightbox -->
 <div id="lightbox" class="lightbox" aria-hidden="true" aria-label="Image viewer">
   <button class="lightbox-close" aria-label="Close">×</button>
   <div class="viewport"><div class="stack" id="lbStack"></div></div>
@@ -169,1201 +166,856 @@ if ('serviceWorker' in navigator) {
     .catch(()=>{});
 }
 </script>
+
 <script type="module">
 (async () => {
-  /* ---------- Status + utils ---------- */
-  const statusEl = document.getElementById('dbStatus');
-  const netTag = document.getElementById('netTag');
-  const setStatus = (t, ok=true) => {
-    statusEl.textContent = t;
-    statusEl.style.borderColor = ok ? 'var(--line)' : 'var(--bad)';
-    if (ok && t.includes('Saved')) setTimeout(()=>{ statusEl.textContent = 'DB: OK (IndexedDB)'; }, 800);
-  };
-  const setNet = () => netTag.textContent = navigator.onLine ? 'Online' : 'Offline';
-  setNet(); window.addEventListener('online', setNet); window.addEventListener('offline', setNet);
-  const esc = s => (s??'').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
-  const clickViaKeys = (ev, pred) => {
-    if (ev.key === 'Enter' || ev.key === ' ') {
-      const t = pred(ev.target);
-      if (t) { ev.preventDefault(); t.click(); }
-    }
-  };
+/* ---------- Status + utils ---------- */
+const statusEl = document.getElementById('dbStatus');
+const netTag = document.getElementById('netTag');
+const couchMsgEl = document.getElementById('couchMsg');
+const setStatus = (t, ok=true) => {
+  statusEl.textContent = t;
+  statusEl.style.borderColor = ok ? 'var(--line)' : 'var(--bad)';
+  if (ok && t.includes('Saved')) setTimeout(()=>{ statusEl.textContent = 'DB: OK (IndexedDB)'; }, 800);
+};
+const setNet = () => netTag.textContent = navigator.onLine ? 'Online' : 'Offline';
+setNet(); window.addEventListener('online', setNet); window.addEventListener('offline', setNet);
+const esc = s => (s??'').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
+const DRIVE_API_KEY = 'AIzaSyDZHZkniW8lHSenR-6lSyidFRzCAWfK0l0';
+const clickViaKeys = (ev, pred) => { if (ev.key==='Enter'||ev.key===' ') { const t=pred(ev.target); if(t){ev.preventDefault(); t.click();} }};
 
-  /* --- Google Drive (UI fallback key) --- */
-  const DRIVE_API_KEY = 'AIzaSyDZHZkniW8lHSenR-6lSyidFRzCAWfK0l0';
+/* ---------- sql.js loader ---------- */
+function loadScript(url){
+  return new Promise((resolve,reject)=>{
+    const s=document.createElement('script'); s.src=url; s.async=true;
+    s.onload=resolve; s.onerror=()=>reject(new Error('script load failed: '+url));
+    document.head.appendChild(s);
+  });
+}
+const SQL_CANDIDATES = [
+  { js: './lib/sqljs/sql-wasm.js', wasm: './lib/sqljs/sql-wasm.wasm' },
+  { js: 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js',
+    wasm: 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.wasm' }
+];
+let SQL = null;
+for (const src of SQL_CANDIDATES) {
+  try { await loadScript(src.js); SQL = await window.initSqlJs({ locateFile: () => src.wasm }); break; }
+  catch (err) { console.warn('sql.js load failed from', src.js, err); }
+}
+if (!SQL) { setStatus('DB init failed: could not load sql.js', false); throw new Error('sql.js not available'); }
 
-  /* ---------- Robust sql.js loader (local → CDN fallback) ---------- */
-  function loadScript(url){
-    return new Promise((resolve,reject)=>{
-      const s=document.createElement('script'); s.src=url; s.async=true;
-      s.onload=resolve; s.onerror=()=>reject(new Error('script load failed: '+url));
-      document.head.appendChild(s);
-    });
+/* ---------- IndexedDB ---------- */
+const IDB_NAME = 'study-notes-idb-techstudy';
+const STORE_SQLITE = 'sqlite';
+const STORE_IMAGES = 'images';
+let idb;
+try {
+  idb = await new Promise((resolve,reject)=>{
+    if (!('indexedDB' in window)) return reject(new Error('IndexedDB not supported (Private mode?)'));
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db=req.result;
+      if(!db.objectStoreNames.contains(STORE_SQLITE)) db.createObjectStore(STORE_SQLITE);
+      if(!db.objectStoreNames.contains(STORE_IMAGES)) db.createObjectStore(STORE_IMAGES);
+    };
+    req.onsuccess = ()=>resolve(req.result);
+    req.onerror   = ()=>reject(req.error||new Error('IndexedDB open failed'));
+  });
+} catch (e) { setStatus('IndexedDB error: ' + (e?.message||e), false); throw e; }
+const idbGet = (store,key)=> new Promise((res,rej)=>{ const tx=idb.transaction(store,'readonly').objectStore(store).get(key); tx.onsuccess=()=>res(tx.result); tx.onerror=()=>rej(tx.error);});
+const idbSet = (store,key,value)=> new Promise((res,rej)=>{ const tx=idb.transaction(store,'readwrite').objectStore(store).put(value,key); tx.onsuccess=()=>res(); tx.onerror=()=>rej(tx.error);});
+const idbDel = (store,key)=> new Promise((res,rej)=>{ const tx=idb.transaction(store,'readwrite').objectStore(store).delete(key); tx.onsuccess=()=>res(); tx.onerror=()=>rej(tx.error);});
+
+/* ---------- SQLite open/create ---------- */
+const raw = await idbGet(STORE_SQLITE, 'main');
+const db = raw ? new SQL.Database(raw instanceof Uint8Array ? raw : new Uint8Array(raw)) : new SQL.Database();
+db.exec(`
+  PRAGMA foreign_keys=ON;
+  create table if not exists subjects(
+    id integer primary key,
+    name text unique not null,
+    created_at integer default (strftime('%s','now'))
+  );
+  create table if not exists topics(
+    id integer primary key,
+    subject_id integer not null references subjects(id) on delete cascade,
+    name text not null,
+    created_at integer default (strftime('%s','now'))
+  );
+  create table if not exists chunks(
+    id integer primary key,
+    topic_id integer not null references topics(id) on delete cascade,
+    name text not null,
+    created_at integer default (strftime('%s','now'))
+  );
+  create table if not exists notes(
+    id integer primary key,
+    scope text not null check(scope in ('topic','chunk')),
+    scope_id integer not null,
+    kind text not null check(kind in ('image','pdf')),
+    title text,
+    path text,
+    url text,
+    created_at integer default (strftime('%s','now'))
+  );
+  create index if not exists idx_notes_scope on notes(scope,scope_id);
+  create table if not exists image_pages(
+    id integer primary key,
+    note_id integer not null references notes(id) on delete cascade,
+    page integer not null,
+    path text not null,
+    created_at integer default (strftime('%s','now')),
+    unique(note_id,page)
+  );
+  create table if not exists sync_checkpoints(key text primary key, value text);
+  create table if not exists rev_map(doc_id text primary key, rev text);
+`);
+let saveTimer;
+const saveDB = async ()=>{ await idbSet(STORE_SQLITE,'main',db.export()); setStatus('Saved ✓'); };
+const scheduleSave = ()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(saveDB,250); };
+window.addEventListener('beforeunload', ()=>{ try { db && idb && saveDB(); } catch(_){} });
+const driver = {
+  exec(sql, bind){ const st=db.prepare(sql); try{ if(bind) st.bind(bind); while(st.step()){} } finally{ st.free(); } scheduleSave(); },
+  select(sql, bind){ const rows=[]; const st=db.prepare(sql); try{ if(bind) st.bind(bind); while(st.step()) rows.push(st.getAsObject()); } finally{ st.free(); } return rows; }
+};
+const writeBlob = async (path, blob)=> idbSet(STORE_IMAGES, path, blob);
+const rmFile   = async (path)=> idbDel(STORE_IMAGES, path);
+const readFile = async (path)=> idbGet(STORE_IMAGES, path);
+
+/* ---------- delete image note cascade ---------- */
+async function deleteImageNoteCascade(noteId){
+  const head = driver.select(`select path from notes where id=?`, [noteId])[0];
+  if(head?.path) await rmFile(head.path);
+  const pages = driver.select(`select path from image_pages where note_id=?`, [noteId]);
+  for(const p of pages) await rmFile(p.path);
+  driver.exec(`delete from image_pages where note_id=?`, [noteId]);
+  driver.exec(`delete from notes where id=?`, [noteId]);
+}
+
+/* ---------- collapse state ---------- */
+const collapsed = {
+  subjects: new Set(JSON.parse(localStorage.getItem('coll-subjects')||'[]')),
+  topics:   new Set(JSON.parse(localStorage.getItem('coll-topics')||'[]'))
+};
+const saveCollapse = () => {
+  localStorage.setItem('coll-subjects', JSON.stringify([...collapsed.subjects]));
+  localStorage.setItem('coll-topics',   JSON.stringify([...collapsed.topics]));
+};
+
+/* ---------- Couch helpers ---------- */
+const couchCfgKey = 'couchCfg-techstudy';
+const couch = {
+  cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
+  save(){ const { url, db, user, pass } = this.cfg||{}; localStorage.setItem(couchCfgKey, JSON.stringify({ url, db, user, ...(pass?{pass}:{}) })); },
+  base(){ if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.'); return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db); },
+  authHeader(){ if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass); return null; },
+  async ensureDb(){
+    const r = await fetch(this.base(), { method:'GET', headers: this.authHeader()?{Authorization:this.authHeader()}: {}, credentials:'include' });
+    if (r.status===404) throw new Error('DB not found. Create it once on the server.');
+    if (!r.ok) throw new Error(await r.text()); return r.json().catch(()=>null);
+  },
+  async fetchJson(path, opts={}){
+    const headers = Object.assign({ 'Accept':'application/json' }, opts.headers||{}, this.authHeader()?{Authorization:this.authHeader()}: {});
+    const res = await fetch(this.base()+path, { ...opts, headers, credentials:'include' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
   }
-  const SQL_CANDIDATES = [
-    { js: './lib/sqljs/sql-wasm.js', wasm: './lib/sqljs/sql-wasm.wasm' },
-    { js: 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js',
-      wasm: 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.wasm' }
-  ];
-  let SQL = null;
-  for (const src of SQL_CANDIDATES) {
-    try {
-      await loadScript(src.js);
-      SQL = await window.initSqlJs({ locateFile: () => src.wasm });
-      break;
-    } catch (err) {
-      console.warn('sql.js load failed from', src.js, err);
-    }
-  }
-  if (!SQL) { setStatus('DB init failed: could not load sql.js', false); throw new Error('sql.js not available'); }
+};
+// default config
+if (!couch.cfg.url && !couch.cfg.db) { couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' }; couch.save(); }
+(function hydrateCouchForm(){
+  document.getElementById('couchUrl').value  = couch.cfg.url  || '';
+  document.getElementById('couchDb').value   = couch.cfg.db   || '';
+  document.getElementById('couchUser').value = couch.cfg.user || '';
+  document.getElementById('couchPass').value = '';
+})();
 
-  /* ---------- IndexedDB (TechStudy namespace) ---------- */
-  const IDB_NAME = 'study-notes-idb-techstudy';
-  const STORE_SQLITE = 'sqlite';
-  const STORE_IMAGES = 'images';
-
-  let idb;
+// show live DB info after each write/delete
+async function refreshDbInfo(prefix=''){
   try {
-    idb = await new Promise((resolve,reject)=>{
-      if (!('indexedDB' in window)) return reject(new Error('IndexedDB not supported (Private mode?)'));
-      const req = indexedDB.open(IDB_NAME, 1);
-      req.onupgradeneeded = () => {
-        const db=req.result;
-        if(!db.objectStoreNames.contains(STORE_SQLITE)) db.createObjectStore(STORE_SQLITE);
-        if(!db.objectStoreNames.contains(STORE_IMAGES)) db.createObjectStore(STORE_IMAGES);
-      };
-      req.onsuccess = ()=>resolve(req.result);
-      req.onerror   = ()=>reject(req.error || new Error('IndexedDB open failed'));
-    });
-  } catch (e) {
-    setStatus('IndexedDB error: ' + (e?.message || e), false);
-    throw e;
-  }
-  const idbGet = (store,key)=> new Promise((res,rej)=>{
-    const tx=idb.transaction(store,'readonly').objectStore(store).get(key);
-    tx.onsuccess=()=>res(tx.result); tx.onerror=()=>rej(tx.error);
-  });
-  const idbSet = (store,key,value)=> new Promise((res,rej)=>{
-    const tx=idb.transaction(store,'readwrite').objectStore(store).put(value,key);
-    tx.onsuccess=()=>res(); tx.onerror=()=>rej(tx.error);
-  });
-  const idbDel = (store,key)=> new Promise((res,rej)=>{
-    const tx=idb.transaction(store,'readwrite').objectStore(store).delete(key);
-    tx.onsuccess=()=>res(); tx.onerror=()=>rej(tx.error);
-  });
+    const info = await couch.fetchJson('');
+    couchMsgEl.textContent = `${prefix}${prefix?' ':''}Docs: ${info.doc_count}, update_seq: ${info.update_seq}`;
+  } catch { /* ignore */ }
+}
+async function deleteDoc(docId){
+  try {
+    const got = await couch.fetchJson('/'+encodeURIComponent(docId), { method:'GET' });
+    await couch.fetchJson('/'+encodeURIComponent(docId)+'?rev='+encodeURIComponent(got._rev), { method:'DELETE' });
+  } catch(_) {}
+  await refreshDbInfo('Deleted');
+}
+async function upsertDoc(docId, body){
+  let rev=null;
+  try { const existing = await couch.fetchJson('/'+encodeURIComponent(docId), { method:'GET' }); rev = existing._rev||null; }
+  catch(_) {}
+  const payload = rev ? { _id:docId, _rev:rev, ...body } : { _id:docId, ...body };
+  const res = await couch.fetchJson('/'+encodeURIComponent(docId), { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  if (res?.rev) { driver.exec(`insert into rev_map(doc_id,rev) values(?,?) on conflict(doc_id) do update set rev=excluded.rev`, [docId,res.rev]); }
+  await refreshDbInfo('Saved');
+  return res;
+}
 
-  /* ---------- Open / create SQLite DB ---------- */
-  const raw = await idbGet(STORE_SQLITE, 'main');
-  const db = raw ? new SQL.Database(raw instanceof Uint8Array ? raw : new Uint8Array(raw)) : new SQL.Database();
-
-  db.exec(`
-    PRAGMA foreign_keys=ON;
-    create table if not exists subjects(
-      id integer primary key,
-      name text unique not null,
-      created_at integer default (strftime('%s','now'))
-    );
-    create table if not exists topics(
-      id integer primary key,
-      subject_id integer not null references subjects(id) on delete cascade,
-      name text not null,
-      created_at integer default (strftime('%s','now'))
-    );
-    create table if not exists chunks(
-      id integer primary key,
-      topic_id integer not null references topics(id) on delete cascade,
-      name text not null,
-      created_at integer default (strftime('%s','now'))
-    );
-    create table if not exists notes(
-      id integer primary key,
-      scope text not null check(scope in ('topic','chunk')),
-      scope_id integer not null,
-      kind text not null check(kind in ('image','pdf')),
-      title text,
-      path text,
-      url text,
-      created_at integer default (strftime('%s','now'))
-    );
-    create index if not exists idx_notes_scope on notes(scope,scope_id);
-    create table if not exists image_pages(
-      id integer primary key,
-      note_id integer not null references notes(id) on delete cascade,
-      page integer not null,
-      path text not null,
-      created_at integer default (strftime('%s','now')),
-      unique(note_id,page)
-    );
-    /* --- Auto-sync bookkeeping --- */
-    create table if not exists sync_outbox(
-      id integer primary key,
-      doc_id text not null,
-      doc_type text not null,
-      action text not null check(action in ('upsert','delete')),
-      payload text,
-      created_at integer default (strftime('%s','now'))
-    );
-    create table if not exists sync_checkpoints(
-      key text primary key,
-      value text
-    );
-    create table if not exists rev_map(
-      doc_id text primary key,
-      rev text
-    );
-  `);
-
-  let saveTimer;
-  const saveDB = async ()=>{ await idbSet(STORE_SQLITE,'main',db.export()); setStatus('Saved ✓'); };
-  const scheduleSave = ()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(saveDB,250); };
-  window.addEventListener('beforeunload', ()=>{ try { db && idb && saveDB(); } catch(_){} });
-
-  const driver = {
-    exec(sql, bind){
-      const st = db.prepare(sql);
-      try{ if(bind) st.bind(bind); while(st.step()){} } finally{ st.free(); }
-      scheduleSave();
-    },
-    select(sql, bind){
-      const rows=[]; const st=db.prepare(sql);
-      try{ if(bind) st.bind(bind); while(st.step()) rows.push(st.getAsObject()); }
-      finally{ st.free(); }
-      return rows;
+/* ---- image attachment helpers ---- */
+function pageFileName(page, ext){ return `p${page}.${ext}`; }
+function guessExtFromBlob(blob, fallback='png'){
+  const t = (blob?.type||'').toLowerCase();
+  if (t.includes('png')) return 'png';
+  if (t.includes('jpeg')||t.includes('jpg')) return 'jpg';
+  if (t.includes('webp')) return 'webp';
+  if (t.includes('heic')||t.includes('heif')) return 'heic';
+  return fallback;
+}
+async function putAttachment(noteId, page, blob){
+  await couch.ensureDb();
+  // ensure doc exists with current note body
+  const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
+  await upsertDoc(`note:${noteId}`, { type:'note', ...n });
+  // latest rev
+  let cur=null; try { cur = await couch.fetchJson('/'+encodeURIComponent(`note:${noteId}`), { method:'GET' }); } catch(_){}
+  const ext = guessExtFromBlob(blob, (n.path||'').split('.').pop()||'png');
+  const att = pageFileName(page, ext);
+  const url = couch.base()+'/'+encodeURIComponent(`note:${noteId}`)+'/'+encodeURIComponent(att)+'?rev='+encodeURIComponent(cur?._rev||'');
+  const r = await fetch(url, { method:'PUT', body: blob, headers:{ 'Content-Type': blob.type||'application/octet-stream', ...(couch.authHeader()?{Authorization:couch.authHeader()}:{} ) }, credentials:'include' });
+  if (!r.ok) throw new Error(await r.text());
+  const j = await r.json();
+  driver.exec(`insert into rev_map(doc_id,rev) values(?,?) on conflict(doc_id) do update set rev=excluded.rev`, [`note:${noteId}`, j.rev]);
+  await refreshDbInfo('Synced');
+}
+async function pullAttachmentsForNote(doc){
+  const id = Number((doc._id||'').split(':')[1]||0);
+  if (!id || doc.kind!=='image') return;
+  if (!doc._attachments) return;
+  let firstSet=false;
+  for (const [name, meta] of Object.entries(doc._attachments)){
+    const m = name.match(/^p(\d+)\.([a-z0-9]+)$/i);
+    if (!m) continue;
+    const page = Number(m[1]); const ext=m[2].toLowerCase();
+    const blobRes = await fetch(couch.base()+'/'+encodeURIComponent(doc._id)+'/'+encodeURIComponent(name), { credentials:'include' });
+    if (!blobRes.ok) continue;
+    const blob = await blobRes.blob();
+    const path = `/images/n${id}/p${page}.${ext}`;
+    await writeBlob(path, blob);
+    if (page===1 && !firstSet){
+      driver.exec(`update notes set path=? where id=?`, [path, id]);
+      firstSet = true;
     }
-  };
-
-  const writeBlob = async (path, blob)=> idbSet(STORE_IMAGES, path, blob);
-  const rmFile   = async (path)=> idbDel(STORE_IMAGES, path);
-  const readFile = async (path)=> idbGet(STORE_IMAGES, path);
-
-  async function deleteImageNoteCascade(noteId){
-    const head = driver.select(`select path from notes where id=?`, [noteId])[0];
-    if(head?.path) await rmFile(head.path);
-    const pages = driver.select(`select path from image_pages where note_id=?`, [noteId]);
-    for(const p of pages) await rmFile(p.path);
-    driver.exec(`delete from image_pages where note_id=?`, [noteId]);
-    driver.exec(`delete from notes where id=?`, [noteId]);
+    driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?) on conflict(note_id,page) do update set path=excluded.path`, [id,page,path]);
   }
+}
 
-  /* ---------- collapse state ---------- */
-  const collapsed = {
-    subjects: new Set(JSON.parse(localStorage.getItem('coll-subjects')||'[]')),
-    topics:   new Set(JSON.parse(localStorage.getItem('coll-topics')||'[]'))
-  };
-  const saveCollapse = () => {
-    localStorage.setItem('coll-subjects', JSON.stringify([...collapsed.subjects]));
-    localStorage.setItem('coll-topics',   JSON.stringify([...collapsed.topics]));
-  };
+/* ---------- UI refs ---------- */
+const subjectsEl = document.getElementById('subjects');
+const details = {
+  scope:null, id:null,
+  titleEl: document.getElementById('detailTitle'),
+  tagEl: document.getElementById('scopeTag'),
+  bodyEl: document.getElementById('detailBody'),
+  buttonsRow: document.getElementById('renameDeleteBtns'),
+  imgInput: document.getElementById('imgInput'),
+  imageList: document.getElementById('imageList'),
+  pdfTitle: document.getElementById('pdfTitle'),
+  pdfUrl: document.getElementById('pdfUrl'),
+  pdfList: document.getElementById('pdfList')
+};
+function setDetail(scope,id,name){
+  details.scope=scope; details.id=id;
+  details.titleEl.textContent = name || '';
+  details.tagEl.textContent = scope ? `${scope.toUpperCase()} DETAILS` : 'Nothing selected';
+  details.bodyEl.style.display = scope ? '' : 'none';
+  details.buttonsRow.style.display = scope ? '' : 'none';
+  if(scope) loadNotes();
+}
 
-  /* ---------- SYNC helpers (docs + attachments) ---------- */
-  function queue(doc_id, doc_type, action, obj){
-    driver.exec(`insert into sync_outbox(doc_id,doc_type,action,payload) values(?,?,?,?)`,
-      [doc_id, doc_type, action, obj?JSON.stringify(obj):null]);
+/* ---------- render tree ---------- */
+async function loadTree(){
+  const subs = driver.select(`select id,name from subjects order by created_at asc`);
+  subjectsEl.innerHTML='';
+  for(const s of subs){
+    const collapsedSubj = collapsed.subjects.has(s.id);
+    const caret = collapsedSubj ? '▸' : '▾';
+    const el=document.createElement('div'); el.className='subject'+(collapsedSubj?' collapsed':''); el.dataset.sid=s.id;
+    el.innerHTML=`
+      <header>
+        <div class="row">
+          <button class="iconbtn slim" data-act="toggle-subj" data-id="${s.id}" aria-expanded="${!collapsedSubj}" aria-controls="subject-body-${s.id}"><span class="icon">${caret}</span></button>
+          <h2>${esc(s.name)}</h2>
+        </div>
+        <div class="row">
+          <button class="ghost slim" data-act="rename-subj" data-id="${s.id}">Rename</button>
+          <button class="warn slim" data-act="del-subj" data-id="${s.id}">Delete</button>
+        </div>
+      </header>
+      <div class="subject-body" id="subject-body-${s.id}">
+        <div class="row">
+          <input id="topic-input-${s.id}" type="text" placeholder="New topic name" aria-label="New topic name"/>
+          <button class="slim" data-act="add-topic" data-id="${s.id}">+ Topic</button>
+        </div>
+        <div id="topic-list-${s.id}"></div>
+      </div>`;
+    subjectsEl.appendChild(el);
+    await renderTopics(s.id);
   }
-  function setRev(doc_id, rev){
-    driver.exec(`insert into rev_map(doc_id,rev) values(?,?)
-                 on conflict(doc_id) do update set rev=excluded.rev`, [doc_id, rev]);
-  }
-  function getRev(doc_id){
-    const r = driver.select(`select rev from rev_map where doc_id=?`, [doc_id])[0];
-    return r?.rev || null;
-  }
-  function getSince(){
-    const r = driver.select(`select value from sync_checkpoints where key='since'`)[0];
-    return r?.value || '0';
-  }
-  function setSince(v){
-    driver.exec(`insert into sync_checkpoints(key,value) values('since',?)
-                 on conflict(key) do update set value=excluded.value`, [v]);
-  }
-
-  /* ---------- Couch helpers ---------- */
-  const couchCfgKey = 'couchCfg-techstudy';
-  const couchMsgEl  = document.getElementById('couchMsg');
-
-  const couch = {
-    cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
-    save(){ 
-      const { url, db, user, pass } = this.cfg || {};
-      localStorage.setItem(couchCfgKey, JSON.stringify({ url, db, user, ...(pass?{pass}: {}) })); 
-    },
-    base(){
-      if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
-      return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
-    },
-    authHeader(){
-      if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
-      return null;
-    },
-    async ensureDb(){
-      const r = await fetch(this.base(), {
-        method: 'GET',
-        headers: this.authHeader() ? { Authorization: this.authHeader() } : {},
-        credentials: 'include'
-      });
-      if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
-      if (!r.ok) throw new Error(await r.text());
-      return r.json().catch(()=>null);
-    },
-    async fetchJson(path, opts = {}){
-      const headers = Object.assign(
-        { 'Accept': 'application/json' },
-        opts.headers || {},
-        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
-      );
-      const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
-    async fetchRaw(path, opts = {}) {
-      const headers = Object.assign(
-        {},
-        opts.headers || {},
-        this.authHeader() ? { 'Authorization': this.authHeader() } : {}
-      );
-      return fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
-    }
-  };
-
-  // Prefill sensible defaults once
-  if (!couch.cfg.url && !couch.cfg.db) {
-    couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
-    couch.save();
-  }
-  // hydrate form on load
-  (function hydrateCouchForm(){
-    document.getElementById('couchUrl').value  = couch.cfg.url  || '';
-    document.getElementById('couchDb').value   = couch.cfg.db   || '';
-    document.getElementById('couchUser').value = couch.cfg.user || '';
-    document.getElementById('couchPass').value = '';
-  })();
-
-  document.getElementById('couchSave').addEventListener('click', ()=>{
-    couch.cfg.url  = document.getElementById('couchUrl').value.trim();
-    couch.cfg.db   = document.getElementById('couchDb').value.trim();
-    couch.cfg.user = document.getElementById('couchUser').value.trim();
-    const pw       = document.getElementById('couchPass').value;
-    if (pw) couch.cfg.pass = pw;
-    couch.save();
-    couchMsgEl.textContent = 'Saved Couch settings.';
-  });
-
-  document.getElementById('couchTest').addEventListener('click', async ()=>{
-    try {
-      const info = (await couch.ensureDb()) || (await couch.fetchJson(''));
-      couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`;
-    } catch (err) {
-      couchMsgEl.textContent = 'Test failed: ' + err.message;
-    }
-  });
-
-  /* --- Helper: CouchDB upsert with _rev to avoid conflicts --- */
-  async function upsertDoc(docId, body) {
-    let rev = null;
-    try {
-      const existing = await couch.fetchJson('/' + encodeURIComponent(docId), { method: 'GET' });
-      rev = existing._rev || null;
-    } catch (_) { /* 404 is fine */ }
-    const payload = rev ? { _id: docId, _rev: rev, ...body } : { _id: docId, ...body };
-    const res = await couch.fetchJson('/' + encodeURIComponent(docId), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (res.rev) setRev(docId, res.rev);
-    return res;
-  }
-
-  /* --- Attachments helpers (images) --- */
-  const attachmentName = (path) => (path||'').replace(/^\//,''); // '/a/b.png' -> 'a/b.png'
-
-  async function putAttachment(docId, name, blob, type='application/octet-stream'){
-    await couch.ensureDb();
-    // Ensure doc exists
-    let rev = getRev(docId);
-    if (!rev) {
-      try {
-        const idNum = Number(String(docId).split(':')[1]||0);
-        const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [idNum])[0];
-        if (n) {
-          const up = await upsertDoc(docId, { type:'note', ...n });
-          rev = up.rev || null;
-        }
-      } catch(_) {}
-    }
-    // Get latest rev
-    if (!rev) {
-      try {
-        const got = await couch.fetchJson('/' + encodeURIComponent(docId), { method: 'GET' });
-        rev = got._rev || null;
-      } catch(_) {}
-    }
-    const url = '/' + encodeURIComponent(docId) + '/' + encodeURIComponent(name) + (rev ? ('?rev=' + encodeURIComponent(rev)) : '');
-    const res = await couch.fetchRaw(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': type },
-      body: blob
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const j = await res.json();
-    if (j.rev) setRev(docId, j.rev);
-    return j;
-  }
-
-  async function downloadAttachment(docId, name){
-    const res = await couch.fetchRaw('/' + encodeURIComponent(docId) + '/' + encodeURIComponent(name), { method:'GET' });
-    if (!res.ok) throw new Error(await res.text());
-    return res.blob();
-  }
-
-  /* ---------- UI refs ---------- */
-  const subjectsEl = document.getElementById('subjects');
-  const details = {
-    scope:null, id:null,
-    titleEl: document.getElementById('detailTitle'),
-    tagEl: document.getElementById('scopeTag'),
-    bodyEl: document.getElementById('detailBody'),
-    buttonsRow: document.getElementById('renameDeleteBtns'),
-    imgInput: document.getElementById('imgInput'),
-    imageList: document.getElementById('imageList'),
-    pdfTitle: document.getElementById('pdfTitle'),
-    pdfUrl: document.getElementById('pdfUrl'),
-    pdfList: document.getElementById('pdfList')
-  };
-
-  function setDetail(scope,id,name){
-    details.scope=scope; details.id=id;
-    details.titleEl.textContent = name || '';
-    details.tagEl.textContent = scope ? `${scope.toUpperCase()} DETAILS` : 'Nothing selected';
-    details.bodyEl.style.display = scope ? '' : 'none';
-    details.buttonsRow.style.display = scope ? '' : 'none';
-    if(scope) loadNotes();
-  }
-
-  /* ---------- render tree ---------- */
-  async function loadTree(){
-    const subs = driver.select(`select id,name from subjects order by created_at asc`);
-    subjectsEl.innerHTML='';
-    for(const s of subs){
-      const collapsedSubj = collapsed.subjects.has(s.id);
-      const caret = collapsedSubj ? '▸' : '▾';
-      const el=document.createElement('div'); el.className='subject'+(collapsedSubj?' collapsed':''); el.dataset.sid=s.id;
-      el.innerHTML=`
+}
+async function renderTopics(subjectId){
+  const list = document.getElementById(`topic-list-${subjectId}`); if(!list) return;
+  const topics = driver.select(`
+    select t.id,t.name,(select count(*) from chunks c where c.topic_id=t.id) as chunks
+    from topics t where t.subject_id=? order by t.created_at asc`, [subjectId]);
+  list.innerHTML = topics.map(t=>{
+    const collapsedTopic = collapsed.topics.has(t.id);
+    const caret = collapsedTopic ? '▸' : '▾';
+    return `
+      <div class="topic ${collapsedTopic?'collapsed':''}" data-tid="${t.id}">
         <header>
           <div class="row">
-            <button class="iconbtn slim" data-act="toggle-subj" data-id="${s.id}" aria-expanded="${!collapsedSubj}" aria-controls="subject-body-${s.id}"><span class="icon">${caret}</span></button>
-            <h2>${esc(s.name)}</h2>
+            <button class="iconbtn slim" data-act="toggle-topic" data-id="${t.id}" aria-expanded="${!collapsedTopic}" aria-controls="chunk-list-${t.id}"><span class="icon">${caret}</span></button>
+            <h3 data-act="open-topic" data-id="${t.id}" tabindex="0">${esc(t.name)} <span class="small">(${t.chunks} chunks)</span></h3>
           </div>
           <div class="row">
-            <button class="ghost slim" data-act="rename-subj" data-id="${s.id}">Rename</button>
-            <button class="warn slim" data-act="del-subj" data-id="${s.id}">Delete</button>
+            <button class="slim" data-act="add-chunk" data-id="${t.id}">+ Chunk</button>
+            <button class="ghost slim" data-act="rename-topic" data-id="${t.id}">Rename</button>
+            <button class="warn slim" data-act="del-topic" data-id="${t.id}">Delete</button>
           </div>
         </header>
-        <div class="subject-body" id="subject-body-${s.id}">
-          <div class="row">
-            <input id="topic-input-${s.id}" type="text" placeholder="New topic name" aria-label="New topic name"/>
-            <button class="slim" data-act="add-topic" data-id="${s.id}">+ Topic</button>
-          </div>
-          <div id="topic-list-${s.id}"></div>
-        </div>`;
-      subjectsEl.appendChild(el);
-      await renderTopics(s.id);
-    }
-  }
-  async function renderTopics(subjectId){
-    const list = document.getElementById(`topic-list-${subjectId}`); if(!list) return;
-    const topics = driver.select(`
-      select t.id,t.name,(select count(*) from chunks c where c.topic_id=t.id) as chunks
-      from topics t where t.subject_id=? order by t.created_at asc`, [subjectId]);
-    list.innerHTML = topics.map(t=>{
-      const collapsedTopic = collapsed.topics.has(t.id);
-      const caret = collapsedTopic ? '▸' : '▾';
-      return `
-        <div class="topic ${collapsedTopic?'collapsed':''}" data-tid="${t.id}">
-          <header>
-            <div class="row">
-              <button class="iconbtn slim" data-act="toggle-topic" data-id="${t.id}" aria-expanded="${!collapsedTopic}" aria-controls="chunk-list-${t.id}"><span class="icon">${caret}</span></button>
-              <h3 data-act="open-topic" data-id="${t.id}" tabindex="0">${esc(t.name)} <span class="small">(${t.chunks} chunks)</span></h3>
-            </div>
-            <div class="row">
-              <button class="slim" data-act="add-chunk" data-id="${t.id}">+ Chunk</button>
-              <button class="ghost slim" data-act="rename-topic" data-id="${t.id}">Rename</button>
-              <button class="warn slim" data-act="del-topic" data-id="${t.id}">Delete</button>
-            </div>
-          </header>
-          <div class="chunks" id="chunk-list-${t.id}"></div>
-        </div>`;
-    }).join('');
-    for(const t of topics) await renderChunks(t.id);
-  }
-  async function renderChunks(topicId){
-    const list = document.getElementById(`chunk-list-${topicId}`); if(!list) return;
-    const chunks = driver.select(`select id,name from chunks where topic_id=? order by created_at asc`, [topicId]);
-    list.innerHTML = chunks.map(c=>`
-      <span class="chunk-pill" data-act="open-chunk" data-id="${c.id}" role="button" tabindex="0" aria-label="Open chunk ${esc(c.name)}">${esc(c.name)}</span>
-      <button class="ghost slim" data-act="rename-chunk" data-id="${c.id}">Rename</button>
-      <button class="warn slim" data-act="del-chunk" data-id="${c.id}">Delete</button>
-    `).join('');
-  }
+        <div class="chunks" id="chunk-list-${t.id}"></div>
+      </div>`;
+  }).join('');
+  for(const t of topics) await renderChunks(t.id);
+}
+async function renderChunks(topicId){
+  const list = document.getElementById(`chunk-list-${topicId}`); if(!list) return;
+  const chunks = driver.select(`select id,name from chunks where topic_id=? order by created_at asc`, [topicId]);
+  list.innerHTML = chunks.map(c=>`
+    <span class="chunk-pill" data-act="open-chunk" data-id="${c.id}" role="button" tabindex="0" aria-label="Open chunk ${esc(c.name)}">${esc(c.name)}</span>
+    <button class="ghost slim" data-act="rename-chunk" data-id="${c.id}">Rename</button>
+    <button class="warn slim" data-act="del-chunk" data-id="${c.id}">Delete</button>
+  `).join('');
+}
 
-  /* ---------- left pane actions + QUEUE ---------- */
-  subjectsEl.addEventListener('keydown', (e)=>{
-    clickViaKeys(e, t => t.closest('[data-act]') || (t.classList.contains('chunk-pill') ? t : null));
-  });
+/* ---------- left pane actions (all Couch writes refresh doc count) ---------- */
+subjectsEl.addEventListener('keydown', (e)=>{ clickViaKeys(e, t => t.closest('[data-act]') || (t.classList.contains('chunk-pill') ? t : null)); });
+subjectsEl.addEventListener('click', async (e)=>{
+  const el = e.target.closest('button, h3, .chunk-pill'); if(!el) return;
+  const act = el.dataset.act, id = Number(el.dataset.id);
+  try{
+    if(act==='toggle-subj'){
+      const card = el.closest('.subject'); const sid = Number(id);
+      const collapsedNow = card.classList.toggle('collapsed');
+      el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
+      el.setAttribute('aria-expanded', String(!collapsedNow));
+      if(collapsedNow) collapsed.subjects.add(sid); else collapsed.subjects.delete(sid);
+      saveCollapse();
 
-  subjectsEl.addEventListener('click', async (e)=>{
-    const el = e.target.closest('button, h3, .chunk-pill'); if(!el) return;
-    const act = el.dataset.act, id = Number(el.dataset.id);
-    try{
-      if(act==='toggle-subj'){
-        const card = el.closest('.subject'); const sid = Number(id);
-        const collapsedNow = card.classList.toggle('collapsed');
-        el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
-        el.setAttribute('aria-expanded', String(!collapsedNow));
-        if(collapsedNow) collapsed.subjects.add(sid); else collapsed.subjects.delete(sid);
-        saveCollapse();
+    } else if(act==='toggle-topic'){
+      const card = el.closest('.topic'); const tid = Number(id);
+      const collapsedNow = card.classList.toggle('collapsed');
+      el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
+      el.setAttribute('aria-expanded', String(!collapsedNow));
+      if (collapsedNow) collapsed.topics.add(tid); else collapsed.topics.delete(tid);
+      saveCollapse();
 
-      } else if(act==='toggle-topic'){
-        const card = el.closest('.topic'); const tid = Number(id);
-        const collapsedNow = card.classList.toggle('collapsed');
-        el.querySelector('.icon').textContent = collapsedNow ? '▸' : '▾';
-        el.setAttribute('aria-expanded', String(!collapsedNow));
-        if (collapsedNow) collapsed.topics.add(tid); else collapsed.topics.delete(tid);
-        saveCollapse();
+    } else if (act === 'add-topic') {
+      const sid = id;
+      const inp = document.getElementById(`topic-input-${sid}`);
+      const name = (inp.value || '').trim(); if (!name) return;
+      driver.exec(`insert into topics(subject_id,name) values(?,?)`, [sid, name]);
+      const tid = driver.select(`select last_insert_rowid() as id`)[0].id;
+      await upsertDoc(`topic:${tid}`, { type:'topic', id:tid, subject_id:sid, name, created_at:Math.floor(Date.now()/1000) });
+      inp.value = '';
+      await renderTopics(sid);
 
-      } else if (act === 'add-topic') {
-        const sid = id;
-        const inp = document.getElementById(`topic-input-${sid}`);
-        const name = (inp.value || '').trim(); if (!name) return;
-        driver.exec(`insert into topics(subject_id,name) values(?,?)`, [sid, name]);
-        const tid = driver.select(`select last_insert_rowid() as id`)[0].id;
-        queue(`topic:${tid}`, 'topic', 'upsert', { id: tid, subject_id: sid, name, created_at: Math.floor(Date.now()/1000) });
-        inp.value = '';
-        await renderTopics(sid);
+    } else if (act === 'rename-subj') {
+      const [r] = driver.select(`select name from subjects where id=?`, [id]);
+      const name = prompt('Rename subject', r?.name || ''); if (!name) return;
+      driver.exec(`update subjects set name=? where id=?`, [name, id]);
+      await upsertDoc(`subject:${id}`, { type:'subject', id, name, created_at:Math.floor(Date.now()/1000) });
+      await loadTree();
 
-      } else if (act === 'rename-subj') {
-        const [r] = driver.select(`select name from subjects where id=?`, [id]);
-        const name = prompt('Rename subject', r?.name || ''); if (!name) return;
-        driver.exec(`update subjects set name=? where id=?`, [name, id]);
-        queue(`subject:${id}`, 'subject', 'upsert', { id, name, created_at: Math.floor(Date.now()/1000) });
-        await loadTree();
+    } else if (act === 'del-subj') {
+      if (!confirm('Delete subject and everything under it?')) return;
+      const topicIds = driver.select(`select id from topics where subject_id=?`, [id]).map(x => x.id);
+      const chunkIds = driver.select(`select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?`, [id]).map(x => x.id);
+      const noteIds  = driver.select(`
+        select n.id from notes n
+        where (n.scope='topic' and n.scope_id in (select id from topics where subject_id=?))
+           or (n.scope='chunk' and n.scope_id in (select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?))
+      `, [id, id]).map(x => x.id);
+      for (const nid of noteIds) { await deleteDoc(`note:${nid}`); await deleteImageNoteCascade(nid); }
+      for (const cid of chunkIds) await deleteDoc(`chunk:${cid}`);
+      for (const tid of topicIds) await deleteDoc(`topic:${tid}`);
+      await deleteDoc(`subject:${id}`);
+      driver.exec(`delete from subjects where id=?`, [id]);
+      collapsed.subjects.delete(id); saveCollapse();
+      await loadTree(); setDetail(null, null, '');
 
-      } else if (act === 'del-subj') {
-        if (!confirm('Delete subject and everything under it?')) return;
-        const topicIds = driver.select(`select id from topics where subject_id=?`, [id]).map(x => x.id);
-        const chunkIds = driver.select(`select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?`, [id]).map(x => x.id);
-        const noteIds  = driver.select(`
-          select n.id from notes n
-          where (n.scope='topic' and n.scope_id in (select id from topics where subject_id=?))
-             or (n.scope='chunk' and n.scope_id in (select c.id from chunks c join topics t on c.topic_id=t.id where t.subject_id=?))
-        `, [id, id]).map(x => x.id);
-        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-        for (const cid of chunkIds) queue(`chunk:${cid}`, 'chunk', 'delete', null);
-        for (const tid of topicIds) queue(`topic:${tid}`, 'topic', 'delete', null);
-        queue(`subject:${id}`, 'subject', 'delete', null);
-        for (const nid of noteIds) await deleteImageNoteCascade(nid);
-        driver.exec(`delete from subjects where id=?`, [id]);
-        collapsed.subjects.delete(id); saveCollapse();
-        await loadTree(); setDetail(null, null, '');
+    } else if (act === 'rename-topic') {
+      const [r] = driver.select(`select name,subject_id from topics where id=?`, [id]);
+      const name = prompt('Rename topic', r?.name || ''); if (!name) return;
+      driver.exec(`update topics set name=? where id=?`, [name, id]);
+      await upsertDoc(`topic:${id}`, { type:'topic', id, subject_id:r.subject_id, name, created_at:Math.floor(Date.now()/1000) });
+      await renderTopics(r.subject_id);
+      if (details.scope === 'topic' && details.id === id) setDetail('topic', id, name);
 
-      } else if (act === 'rename-topic') {
-        const [r] = driver.select(`select name,subject_id from topics where id=?`, [id]);
-        const name = prompt('Rename topic', r?.name || ''); if (!name) return;
-        driver.exec(`update topics set name=? where id=?`, [name, id]);
-        queue(`topic:${id}`, 'topic', 'upsert', { id, subject_id: r.subject_id, name, created_at: Math.floor(Date.now()/1000) });
-        await renderTopics(r.subject_id);
-        if (details.scope === 'topic' && details.id === id) setDetail('topic', id, name);
-
-      } else if (act === 'del-topic') {
-        if (!confirm('Delete topic, its chunks & notes?')) return;
-        const [r] = driver.select(`select subject_id from topics where id=?`, [id]);
-        const chunkIds = driver.select(`select id from chunks where topic_id=?`, [id]).map(x => x.id);
-        const noteIds  = driver.select(`
-          select n.id from notes n
-          where (n.scope='topic' and n.scope_id=?)
-             or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
-        `, [id, id]).map(x => x.id);
-        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-        for (const cid of chunkIds) queue(`chunk:${cid}`, 'chunk', 'delete', null);
-        queue(`topic:${id}`, 'topic', 'delete', null);
-        for (const nid of noteIds) await deleteImageNoteCascade(nid);
-        driver.exec(`delete from topics where id=?`, [id]);
-        collapsed.topics.delete(id); saveCollapse();
-        await loadTree(); setDetail(null, null, '');
-
-      } else if (act === 'add-chunk') {
-        const topicId = id;
-        const name = prompt('New chunk name'); if (!name) return;
-        driver.exec(`insert into chunks(topic_id,name) values(?,?)`, [topicId, name]);
-        const cid = driver.select(`select last_insert_rowid() as id`)[0].id;
-        queue(`chunk:${cid}`, 'chunk', 'upsert', { id: cid, topic_id: topicId, name, created_at: Math.floor(Date.now()/1000) });
-        await renderChunks(topicId);
-
-      } else if (act === 'rename-chunk') {
-        const [r] = driver.select(`select name,topic_id from chunks where id=?`, [id]);
-        const name = prompt('Rename chunk', r?.name || ''); if (!name) return;
-        driver.exec(`update chunks set name=? where id=?`, [name, id]);
-        queue(`chunk:${id}`, 'chunk', 'upsert', { id, topic_id: r.topic_id, name, created_at: Math.floor(Date.now()/1000) });
-        await renderChunks(r.topic_id);
-        if (details.scope === 'chunk' && details.id === id) setDetail('chunk', id, name);
-
-      } else if (act === 'del-chunk') {
-        if (!confirm('Delete this chunk & its notes?')) return;
-        const [r] = driver.select(`select topic_id from chunks where id=?`, [id]);
-        const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [id]).map(x=>x.id);
-        for (const nid of noteIds) queue(`note:${nid}`, 'note', 'delete', null);
-        queue(`chunk:${id}`, 'chunk', 'delete', null);
-        for (const nid of noteIds) await deleteImageNoteCascade(nid);
-        driver.exec(`delete from chunks where id=?`, [id]);
-        await renderChunks(r.topic_id); setDetail(null, null, '');
-
-      } else if (act === 'open-topic') {
-        const [r] = driver.select(`select name from topics where id=?`, [id]);
-        setDetail('topic', id, r?.name || 'Topic');
-
-      } else if (act === 'open-chunk') {
-        const [r] = driver.select(`select name from chunks where id=?`, [id]);
-        setDetail('chunk', id, r?.name || 'Chunk');
-      }
-    } catch (err) { alert(err.message); }
-  });
-
-  /* ---------- top bar ---------- */
-  const addSubject = () => {
-    const name = (document.getElementById('newSubject').value || '').trim(); if (!name) return;
-    driver.exec(`insert into subjects(name) values(?)`, [name]);
-    const sid = driver.select(`select last_insert_rowid() as id`)[0].id;
-    queue(`subject:${sid}`, 'subject', 'upsert', { id: sid, name, created_at: Math.floor(Date.now()/1000) });
-    document.getElementById('newSubject').value = '';
-    loadTree();
-  };
-  document.getElementById('addSubject').addEventListener('click', addSubject);
-  document.getElementById('newSubject').addEventListener('keydown', e => { if (e.key === 'Enter') addSubject(); });
-
-  /* ---------- detail header: Rename/Delete current selection ---------- */
-  document.getElementById('renameBtn').addEventListener('click', ()=>{
-    if (!details.scope || !details.id) return;
-    const current = details.titleEl.textContent || '';
-    const name = prompt(`Rename ${details.scope}`, current); if (!name) return;
-    if (details.scope === 'topic') {
-      const [r] = driver.select(`select subject_id from topics where id=?`, [details.id]);
-      driver.exec(`update topics set name=? where id=?`, [name, details.id]);
-      queue(`topic:${details.id}`, 'topic', 'upsert', { id: details.id, subject_id: r.subject_id, name, created_at: Math.floor(Date.now()/1000) });
-      renderTopics(r.subject_id);
-    } else if (details.scope === 'chunk') {
-      const [r] = driver.select(`select topic_id from chunks where id=?`, [details.id]);
-      driver.exec(`update chunks set name=? where id=?`, [name, details.id]);
-      queue(`chunk:${details.id}`, 'chunk', 'upsert', { id: details.id, topic_id: r.topic_id, name, created_at: Math.floor(Date.now()/1000) });
-      renderChunks(r.topic_id);
-    }
-    setDetail(details.scope, details.id, name);
-  });
-
-  document.getElementById('deleteBtn').addEventListener('click', async ()=>{
-    if (!details.scope || !details.id) return;
-    if (!confirm(`Delete this ${details.scope} and its notes?`)) return;
-    if (details.scope === 'topic') {
-      const [r] = driver.select(`select subject_id from topics where id=?`, [details.id]);
-      const chunkIds = driver.select(`select id from chunks where topic_id=?`, [details.id]).map(x=>x.id);
-      const noteIds = driver.select(`
+    } else if (act === 'del-topic') {
+      if (!confirm('Delete topic, its chunks & notes?')) return;
+      const [r] = driver.select(`select subject_id from topics where id=?`, [id]);
+      const chunkIds = driver.select(`select id from chunks where topic_id=?`, [id]).map(x => x.id);
+      const noteIds  = driver.select(`
         select n.id from notes n
         where (n.scope='topic' and n.scope_id=?)
            or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
-      `, [details.id, details.id]).map(x=>x.id);
-      for (const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
-      for (const cid of chunkIds) queue(`chunk:${cid}`,'chunk','delete',null);
-      queue(`topic:${details.id}`,'topic','delete',null);
-      for (const nid of noteIds) await deleteImageNoteCascade(nid);
-      driver.exec(`delete from topics where id=?`, [details.id]);
-      collapsed.topics.delete(details.id); saveCollapse();
-      await loadTree(); setDetail(null,null,'');
-    } else if (details.scope === 'chunk') {
-      const [r] = driver.select(`select topic_id from chunks where id=?`, [details.id]);
-      const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [details.id]).map(x=>x.id);
-      for (const nid of noteIds) queue(`note:${nid}`,'note','delete',null);
-      queue(`chunk:${details.id}`,'chunk','delete',null);
-      for (const nid of noteIds) await deleteImageNoteCascade(nid);
-      driver.exec(`delete from chunks where id=?`, [details.id]);
-      await renderChunks(r.topic_id); setDetail(null,null,'');
+      `, [id, id]).map(x => x.id);
+      for (const nid of noteIds) { await deleteDoc(`note:${nid}`); await deleteImageNoteCascade(nid); }
+      for (const cid of chunkIds) await deleteDoc(`chunk:${cid}`);
+      await deleteDoc(`topic:${id}`);
+      driver.exec(`delete from topics where id=?`, [id]);
+      collapsed.topics.delete(id); saveCollapse();
+      await loadTree(); setDetail(null, null, '');
+
+    } else if (act === 'add-chunk') {
+      const topicId = id;
+      const name = prompt('New chunk name'); if (!name) return;
+      driver.exec(`insert into chunks(topic_id,name) values(?,?)`, [topicId, name]);
+      const cid = driver.select(`select last_insert_rowid() as id`)[0].id;
+      await upsertDoc(`chunk:${cid}`, { type:'chunk', id:cid, topic_id:topicId, name, created_at:Math.floor(Date.now()/1000) });
+      await renderChunks(topicId);
+
+    } else if (act === 'rename-chunk') {
+      const [r] = driver.select(`select name,topic_id from chunks where id=?`, [id]);
+      const name = prompt('Rename chunk', r?.name || ''); if (!name) return;
+      driver.exec(`update chunks set name=? where id=?`, [name, id]);
+      await upsertDoc(`chunk:${id}`, { type:'chunk', id, topic_id:r.topic_id, name, created_at:Math.floor(Date.now()/1000) });
+      await renderChunks(r.topic_id);
+      if (details.scope === 'chunk' && details.id === id) setDetail('chunk', id, name);
+
+    } else if (act === 'del-chunk') {
+      if (!confirm('Delete this chunk & its notes?')) return;
+      const [r] = driver.select(`select topic_id from chunks where id=?`, [id]);
+      const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [id]).map(x=>x.id);
+      for (const nid of noteIds) { await deleteDoc(`note:${nid}`); await deleteImageNoteCascade(nid); }
+      await deleteDoc(`chunk:${id}`);
+      driver.exec(`delete from chunks where id=?`, [id]);
+      await renderChunks(r.topic_id); setDetail(null, null, '');
+
+    } else if (act === 'open-topic') {
+      const [r] = driver.select(`select name from topics where id=?`, [id]);
+      setDetail('topic', id, r?.name || 'Topic');
+
+    } else if (act === 'open-chunk') {
+      const [r] = driver.select(`select name from chunks where id=?`, [id]);
+      setDetail('chunk', id, r?.name || 'Chunk');
     }
-  });
+  } catch (err) { alert(err.message); }
+});
 
-  /* ---------- Notes UI (images + PDFs) + Lightbox ---------- */
-  const imageList = document.getElementById('imageList');
-  const pdfList   = document.getElementById('pdfList');
+/* ---------- top bar ---------- */
+const addSubject = async () => {
+  const name = (document.getElementById('newSubject').value || '').trim(); if (!name) return;
+  driver.exec(`insert into subjects(name) values(?)`, [name]);
+  const sid = driver.select(`select last_insert_rowid() as id`)[0].id;
+  await upsertDoc(`subject:${sid}`, { type:'subject', id:sid, name, created_at:Math.floor(Date.now()/1000) });
+  document.getElementById('newSubject').value = '';
+  loadTree();
+};
+document.getElementById('addSubject').addEventListener('click', addSubject);
+document.getElementById('newSubject').addEventListener('keydown', e => { if (e.key === 'Enter') addSubject(); });
 
-  // Track blob URLs to revoke and avoid memory leaks
-  let noteBlobURLs = new Set();
-  function clearNoteBlobURLs(){
-    for (const u of noteBlobURLs) { try { URL.revokeObjectURL(u); } catch(_){} }
-    noteBlobURLs.clear();
+/* ---------- detail header buttons ---------- */
+document.getElementById('renameBtn').addEventListener('click', async ()=>{
+  if (!details.scope || !details.id) return;
+  const current = details.titleEl.textContent || '';
+  const name = prompt(`Rename ${details.scope}`, current); if (!name) return;
+  if (details.scope === 'topic') {
+    const [r] = driver.select(`select subject_id from topics where id=?`, [details.id]);
+    driver.exec(`update topics set name=? where id=?`, [name, details.id]);
+    await upsertDoc(`topic:${details.id}`, { type:'topic', id:details.id, subject_id:r.subject_id, name, created_at:Math.floor(Date.now()/1000) });
+    renderTopics(r.subject_id);
+  } else if (details.scope === 'chunk') {
+    const [r] = driver.select(`select topic_id from chunks where id=?`, [details.id]);
+    driver.exec(`update chunks set name=? where id=?`, [name, details.id]);
+    await upsertDoc(`chunk:${details.id}`, { type:'chunk', id:details.id, topic_id:r.topic_id, name, created_at:Math.floor(Date.now()/1000) });
+    renderChunks(r.topic_id);
   }
+  setDetail(details.scope, details.id, name);
+});
+document.getElementById('deleteBtn').addEventListener('click', async ()=>{
+  if (!details.scope || !details.id) return;
+  if (!confirm(`Delete this ${details.scope} and its notes?`)) return;
+  if (details.scope === 'topic') {
+    const [r] = driver.select(`select subject_id from topics where id=?`, [details.id]);
+    const chunkIds = driver.select(`select id from chunks where topic_id=?`, [details.id]).map(x=>x.id);
+    const noteIds = driver.select(`
+      select n.id from notes n
+      where (n.scope='topic' and n.scope_id=?)
+         or (n.scope='chunk' and n.scope_id in (select id from chunks where topic_id=?))
+    `, [details.id, details.id]).map(x=>x.id);
+    for (const nid of noteIds) { await deleteDoc(`note:${nid}`); await deleteImageNoteCascade(nid); }
+    for (const cid of chunkIds) await deleteDoc(`chunk:${cid}`);
+    await deleteDoc(`topic:${details.id}`);
+    driver.exec(`delete from topics where id=?`, [details.id]);
+    collapsed.topics.delete(details.id); saveCollapse();
+    await loadTree(); setDetail(null,null,'');
+  } else if (details.scope === 'chunk') {
+    const [r] = driver.select(`select topic_id from chunks where id=?`, [details.id]);
+    const noteIds = driver.select(`select id from notes where kind in ('image','pdf') and scope='chunk' and scope_id=?`, [details.id]).map(x=>x.id);
+    for (const nid of noteIds) { await deleteDoc(`note:${nid}`); await deleteImageNoteCascade(nid); }
+    await deleteDoc(`chunk:${details.id}`);
+    driver.exec(`delete from chunks where id=?`, [details.id]);
+    await renderChunks(r.topic_id); setDetail(null,null,'');
+  }
+});
 
-  document.getElementById('addPdf').addEventListener('click', ()=>{
-    if (!details.scope) return;
-    const title = (document.getElementById('pdfTitle').value || '').trim() || 'PDF';
-    const url   = (document.getElementById('pdfUrl').value || '').trim();
-    if (!url) return alert('Add a valid URL');
-    driver.exec(`insert into notes(scope,scope_id,kind,title,url) values(?,?,?,?,?)`,
-      [details.scope, details.id, 'pdf', title, url]);
+/* ---------- Notes UI ---------- */
+const imageList = document.getElementById('imageList');
+const pdfList   = document.getElementById('pdfList');
+let noteBlobURLs = new Set();
+function clearNoteBlobURLs(){ for (const u of noteBlobURLs) { try{URL.revokeObjectURL(u);}catch(_){} } noteBlobURLs.clear(); }
+
+document.getElementById('addPdf').addEventListener('click', async ()=>{
+  if (!details.scope) return;
+  const title = (document.getElementById('pdfTitle').value || '').trim() || 'PDF';
+  const url   = (document.getElementById('pdfUrl').value || '').trim();
+  if (!url) return alert('Add a valid URL');
+  driver.exec(`insert into notes(scope,scope_id,kind,title,url) values(?,?,?,?,?)`,
+    [details.scope, details.id, 'pdf', title, url]);
+  const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
+  await upsertDoc(`note:${nid}`, { type:'note', id:nid, scope:details.scope, scope_id:details.id, kind:'pdf', title, url, created_at:Math.floor(Date.now()/1000) });
+  document.getElementById('pdfTitle').value='';
+  document.getElementById('pdfUrl').value='';
+  loadNotes();
+});
+
+/* Add images (page 1 path becomes /images/n<id>/p1.ext for stable attachment names) */
+document.getElementById('imgInput').addEventListener('change', async (e)=>{
+  if (!details.scope) return;
+  for (const f of [...e.target.files]) {
+    // create note first to get numeric ID
+    driver.exec(`insert into notes(scope,scope_id,kind,title,path) values(?,?,?,?,NULL)`, [details.scope, details.id, 'image', f.name]);
     const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
-    queue(`note:${nid}`, 'note', 'upsert', {
-      id:nid, scope:details.scope, scope_id:details.id,
-      kind:'pdf', title, url, created_at:Math.floor(Date.now()/1000)
-    });
-    document.getElementById('pdfTitle').value='';
-    document.getElementById('pdfUrl').value='';
-    loadNotes();
-  });
-
-  /* --- Add image (page 1) and upload as attachment --- */
-  document.getElementById('imgInput').addEventListener('change', async (e)=>{
-    if (!details.scope) return;
-    for (const f of [...e.target.files]) {
-      const ext = (f.name.split('.').pop()||'png').toLowerCase();
-      const title = f.name;
-
-      // 1) create note first to get ID
-      driver.exec(`insert into notes(scope,scope_id,kind,title,path) values(?,?,?,?,?)`,
-        [details.scope, details.id, 'image', title, '']);
-      const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
-
-      // 2) deterministic path + store to IDB
-      const headPath = `/images/n${nid}/p1.${ext}`;
-      await writeBlob(headPath, f);
-
-      // 3) update DB rows
-      driver.exec(`update notes set path=? where id=?`, [headPath, nid]);
-      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid, 1, headPath]);
-
-      // 4) queue + try pushing attachment
-      const nrow = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [nid])[0];
-      queue(`note:${nid}`, 'note', 'upsert', nrow);
-      try {
-        await putAttachment(`note:${nid}`, attachmentName(headPath), f, f.type || `image/${ext}`);
-      } catch(err){ console.warn('attach p1 failed', err); }
-    }
-    e.target.value = '';
-    loadNotes();
-  });
-
-  async function loadNotes(){
-    clearNoteBlobURLs();
-    imageList.innerHTML = '';
-    pdfList.innerHTML   = '';
-
-    // --- IMAGE notes
-    const imgs = driver.select(`
-      select id,title,path from notes
-      where scope=? and scope_id=? and kind='image'
-      order by id desc`, [details.scope, details.id]);
-
-    for (const r of imgs) {
-      let previewPath = r.path;
-      const pages = driver.select(
-        `select id,page,path from image_pages where note_id=? order by page asc`, [r.id]
-      );
-      if (pages.length) previewPath = pages[0].path;
-
-      const prevBlob = await readFile(previewPath).catch(()=>null);
-      const prevURL  = prevBlob ? URL.createObjectURL(prevBlob) : '';
-
-      if (prevURL) noteBlobURLs.add(prevURL);
-
-      const card = document.createElement('div');
-      card.className = 'card';
-      card.dataset.noteid = r.id;
-      card.innerHTML = `
-        ${prevURL ? `<img class="preview" src="${prevURL}" alt="${esc(r.title||'image')}"/>` : `<div class="small">Missing image</div>`}
-        <input type="text" value="${esc(r.title||'')}" placeholder="Caption" class="cap" data-id="${r.id}" style="margin-top:6px"/>
-        <div class="row" style="margin-top:6px">
-          <button class="ghost slim" data-act="save-cap" data-id="${r.id}">Save</button>
-          <button class="warn slim" data-act="del-imgnote" data-id="${r.id}">Delete</button>
-        </div>
-        <div class="row" style="margin-top:6px;align-items:flex-start">
-          <label class="filelabel slim" for="pages-${r.id}">+ Pages</label>
-          <input id="pages-${r.id}" type="file" accept="image/*" multiple data-act="add-pages" data-id="${r.id}"/>
-          <div class="thumbs" id="thumbs-${r.id}"></div>
-        </div>`;
-      imageList.appendChild(card);
-
-      const thumbs = card.querySelector(`#thumbs-${r.id}`);
-      for (const p of pages) {
-        const b = await readFile(p.path).catch(()=>null);
-        if (!b) continue;
-        const u = URL.createObjectURL(b);
-        noteBlobURLs.add(u);
-        const t = document.createElement('img');
-        t.src = u; t.dataset.note = r.id; t.dataset.page = p.page;
-        t.alt = `Page ${p.page}`;
-        thumbs.appendChild(t);
-      }
-    }
-
-    // --- PDF notes
-    const pdfs = driver.select(`
-      select id,title,url from notes
-      where scope=? and scope_id=? and kind='pdf'
-      order by id desc`, [details.scope, details.id]);
-
-    for (const r of pdfs) {
-      const row = document.createElement('div'); row.className = 'card';
-      row.innerHTML = `
-        <div class="row" style="justify-content:space-between">
-          <input type="text" class="pdftitle" data-id="${r.id}" value="${esc(r.title||'PDF')}"/>
-          <button class="ghost slim" data-act="save-pdf" data-id="${r.id}">Save</button>
-        </div>
-        <div class="row" style="margin-top:6px">
-          <input type="url" class="pdfurl" data-id="${r.id}" value="${esc(r.url||'')}"/>
-          <a class="link" href="#" data-open="1">Open</a>
-        </div>
-        <div class="row" style="margin-top:6px">
-          <button class="warn slim" data-act="del-pdf" data-id="${r.id}">Delete</button>
-        </div>`;
-      pdfList.appendChild(row);
-    }
+    const ext = (f.name.split('.').pop()||'png').toLowerCase();
+    const p1  = `/images/n${nid}/p1.${ext}`;
+    await writeBlob(p1, f);
+    driver.exec(`update notes set path=? where id=?`, [p1, nid]);
+    driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid, 1, p1]);
+    await upsertDoc(`note:${nid}`, { type:'note', id:nid, scope:details.scope, scope_id:details.id, kind:'image', title:f.name, path:p1, url:'', created_at:Math.floor(Date.now()/1000) });
+    await putAttachment(nid, 1, f);
   }
+  e.target.value = '';
+  loadNotes();
+});
 
-  /* --- Add extra pages (and upload) --- */
-  imageList.addEventListener('change', async (e)=>{
-    const fi = e.target.closest('input[type=file][data-act="add-pages"]');
-    if (!fi) return;
-    const noteId = Number(fi.dataset.id);
-    let next = driver.select(`select coalesce(max(page),0)+1 as n from image_pages where note_id=?`, [noteId])[0].n;
-    for (const f of [...fi.files]) {
-      const ext  = (f.name.split('.').pop()||'png').toLowerCase();
-      const path = `/images/n${noteId}/p${next}.${ext}`;
-      await writeBlob(path, f);
-      driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId, next, path]);
-      try {
-        await putAttachment(`note:${noteId}`, attachmentName(path), f, f.type || `image/${ext}`);
-      } catch(err){ console.warn('attach p'+next+' failed', err); }
-      next++;
-    }
-    const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
-    if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
-    fi.value = '';
-    loadNotes();
-  });
+async function loadNotes(){
+  clearNoteBlobURLs();
+  imageList.innerHTML = ''; pdfList.innerHTML   = '';
 
-  imageList.addEventListener('click', async (e)=>{
-    const btn = e.target.closest('button');
-    const noteCard = e.target.closest('.card');
-    if (btn) {
-      const id = Number(btn.dataset.id);
-      if (btn.dataset.act === 'save-cap') {
-        const cap = noteCard.querySelector('input.cap').value;
-        driver.exec(`update notes set title=? where id=?`, [cap, id]);
-        const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
-        if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
-      } else if (btn.dataset.act === 'del-imgnote') {
-        if (!confirm('Delete this image note (and all its pages)?')) return;
-        queue(`note:${id}`, 'note', 'delete', null);
-        await deleteImageNoteCascade(id);
-        loadNotes();
-      }
-      return;
-    }
-    if (e.target.matches('.thumbs img')) {
-      openLightboxForNote(Number(e.target.dataset.note), Number(e.target.dataset.page));
-      return;
-    }
-    if (e.target.matches('img.preview')) {
-      openLightboxForNote(Number(noteCard.dataset.noteid), 1);
-    }
-  });
+  // Images
+  const imgs = driver.select(`
+    select id,title,path from notes
+    where scope=? and scope_id=? and kind='image'
+    order by id desc`, [details.scope, details.id]);
 
-  /* ---------- Robust PDF "Open" handling (modal viewer) ---------- */
-  function openPdfFrom(el){
-    const card  = el.closest('.card');
-    const title = (card.querySelector('.pdftitle')?.value || 'PDF').trim();
-    const url   = (card.querySelector('.pdfurl')?.value || '').trim();
-    if (!url) return;
-    openPdfInModal(title, url);
-  }
-  ['pointerdown','touchstart','click'].forEach(type=>{
-    pdfList.addEventListener(type, (e)=>{
-      const link = e.target.closest('a.link[data-open]');
-      if (!link) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openPdfFrom(link);
-    }, { passive:false });
-  });
+  for (const r of imgs) {
+    let previewPath = r.path;
+    const pages = driver.select(`select id,page,path from image_pages where note_id=? order by page asc`, [r.id]);
+    if (pages.length) previewPath = pages[0].path;
+    const prevBlob = await readFile(previewPath).catch(()=>null);
+    const prevURL  = prevBlob ? URL.createObjectURL(prevBlob) : '';
+    if (prevURL) noteBlobURLs.add(prevURL);
 
-  // Buttons on PDF cards (Save/Delete)
-  pdfList.addEventListener('click', async (e)=>{
-    const b = e.target.closest('button'); 
-    if (!b) return;
-    const id = Number(b.dataset.id);
-    if (b.dataset.act === 'save-pdf') {
-      const card  = b.closest('.card');
-      const title = card.querySelector('.pdftitle').value;
-      const url   = card.querySelector('.pdfurl').value;
-      driver.exec(`update notes set title=?, url=? where id=?`, [title, url, id]);
-      const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
-      if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
-    } else if (b.dataset.act === 'del-pdf') {
-      if (!confirm('Delete PDF link?')) return;
-      queue(`note:${id}`, 'note', 'delete', null);
-      driver.exec(`delete from notes where id=?`, [id]);
-      loadNotes();
-    }
-  });
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.noteid = r.id;
+    card.innerHTML = `
+      ${prevURL ? `<img class="preview" src="${prevURL}" alt="${esc(r.title||'image')}"/>` : `<div class="small">Missing image</div>`}
+      <input type="text" value="${esc(r.title||'')}" placeholder="Caption" class="cap" data-id="${r.id}" style="margin-top:6px"/>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost slim" data-act="save-cap" data-id="${r.id}">Save</button>
+        <button class="warn slim" data-act="del-imgnote" data-id="${r.id}">Delete</button>
+      </div>
+      <div class="row" style="margin-top:6px;align-items:flex-start">
+        <label class="filelabel slim" for="pages-${r.id}">+ Pages</label>
+        <input id="pages-${r.id}" type="file" accept="image/*" multiple data-act="add-pages" data-id="${r.id}"/>
+        <div class="thumbs" id="thumbs-${r.id}"></div>
+      </div>`;
+    imageList.appendChild(card);
 
-  /* ---------- Lightbox ---------- */
-  const lbEl    = document.getElementById('lightbox');
-  const lbStack = document.getElementById('lbStack');
-  const lbClose = document.querySelector('.lightbox-close');
-  const lbVP    = lbEl.querySelector('.viewport');
-  let lbZoom = 1;
-  let lbURLs = new Set();
-
-  function lbUpdateZoom(){
-    if (lbZoom===1){ lbEl.classList.remove('zoomed'); lbStack.style.setProperty('--z','1'); lbVP.scrollTop=lbVP.scrollLeft=0; }
-    else { lbEl.classList.add('zoomed'); lbStack.style.setProperty('--z', String(lbZoom)); }
-  }
-  function lbRevoke(){
-    for (const u of lbURLs) { try { URL.revokeObjectURL(u); } catch(_){} }
-    lbURLs.clear();
-  }
-  function lbCloseAll(){ 
-    lbEl.classList.remove('show','zoomed'); 
-    lbEl.setAttribute('aria-hidden','true'); 
-    lbStack.innerHTML=''; 
-    lbZoom=1; 
-    lbRevoke();
-  }
-  lbClose.addEventListener('click', ()=>{ if(lbZoom>1){ lbZoom=1; lbUpdateZoom(); } else lbCloseAll(); });
-  lbEl.addEventListener('click', (e)=>{ if(e.target===lbEl) lbCloseAll(); });
-  lbVP.addEventListener('click', (e)=>{ if(e.target===lbVP) lbCloseAll(); });
-  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') lbCloseAll(); });
-
-  async function openLightboxForNote(noteId, startPage=1){
-    const note  = driver.select(`select title from notes where id=?`, [noteId])[0];
-    const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [noteId]);
-    if (!pages.length) {
-      const head = driver.select(`select path from notes where id=?`, [noteId])[0];
-      if (!head?.path) return;
-      pages.push({page:1, path:head.path});
-    }
-    lbStack.innerHTML = ''; lbRevoke();
+    const thumbs = card.querySelector(`#thumbs-${r.id}`);
     for (const p of pages) {
       const b = await readFile(p.path).catch(()=>null);
       if (!b) continue;
       const u = URL.createObjectURL(b);
-      lbURLs.add(u);
-      const im = document.createElement('img');
-      im.src = u;
-      im.alt = (note?.title||'image') + ` · p${p.page}`;
-      im.id  = `p${p.page}`;
-      lbStack.appendChild(im);
-    }
-    lbEl.classList.add('show'); lbEl.setAttribute('aria-hidden','false'); lbZoom=1; lbUpdateZoom();
-    const tgt = document.getElementById(`p${startPage}`); if (tgt) tgt.scrollIntoView({block:'start', behavior:'instant'});
-  }
-
-  /* ---------- PDF viewer (chunked, Drive aware) ---------- */
-  async function loadPdfJs() {
-    try {
-      const mod = await import('/lib/pdfjs/pdf.mjs');
-      return { pdfjsLib: mod, workerSrc: '/lib/pdfjs/pdf.worker.mjs' };
-    } catch {
-      const base = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/';
-      const mod = await import(base + 'pdf.mjs');
-      return { pdfjsLib: mod, workerSrc: base + 'pdf.worker.mjs' };
+      noteBlobURLs.add(u);
+      const t = document.createElement('img');
+      t.src = u; t.dataset.note = r.id; t.dataset.page = p.page;
+      t.alt = `Page ${p.page}`;
+      thumbs.appendChild(t);
     }
   }
-  function extractDriveId(s) {
-    if (!s) return '';
-    if (/^[A-Za-z0-9_-]{20,}$/.test(s)) return s; // raw ID
-    try {
-      const u = new URL(s);
-      const m1 = u.pathname.match(/\/file\/d\/([^/]+)/); if (m1) return m1[1];
-      return u.searchParams.get('id') || '';
-    } catch { return ''; }
+
+  // PDFs
+  const pdfs = driver.select(`
+    select id,title,url from notes
+    where scope=? and scope_id=? and kind='pdf'
+    order by id desc`, [details.scope, details.id]);
+
+  for (const r of pdfs) {
+    const row = document.createElement('div'); row.className = 'card';
+    row.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <input type="text" class="pdftitle" data-id="${r.id}" value="${esc(r.title||'PDF')}"/>
+        <button class="ghost slim" data-act="save-pdf" data-id="${r.id}">Save</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <input type="url" class="pdfurl" data-id="${r.id}" value="${esc(r.url||'')}"/>
+        <a class="link" href="${r.url||'#'}" target="_blank" rel="noopener noreferrer">Open</a>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="warn slim" data-act="del-pdf" data-id="${r.id}">Delete</button>
+      </div>`;
+    pdfList.appendChild(row);
   }
-  const modal = document.getElementById('pdfModal');
-  const viewer = document.getElementById('pdfViewer');
-  const titleBar = document.getElementById('pdfTitleBar');
-  const metaEl = document.getElementById('pdfMeta');
-  const closeBtn = document.getElementById('pdfClose');
+}
 
-  function closePdfModal() {
-    modal.style.display = 'none';
-    viewer.innerHTML = '';
-    metaEl.textContent = '';
+imageList.addEventListener('change', async (e)=>{
+  const fi = e.target.closest('input[type=file][data-act="add-pages"]'); if (!fi) return;
+  const noteId = Number(fi.dataset.id);
+  let next = driver.select(`select coalesce(max(page),0)+1 as n from image_pages where note_id=?`, [noteId])[0].n;
+  for (const f of [...fi.files]) {
+    const ext  = (f.name.split('.').pop()||'png').toLowerCase();
+    const path = `/images/n${noteId}/p${next}.${ext}`;
+    await writeBlob(path, f);
+    driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId, next, path]);
+    await putAttachment(noteId, next, f);
+    next++;
   }
-  closeBtn.addEventListener('click', closePdfModal);
-  modal.addEventListener('click', (e) => { if (e.target === modal) closePdfModal(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePdfModal(); });
-
-  async function pickPdfSource(urlOrId){
-    const id = extractDriveId(urlOrId);
-    if (!id) return urlOrId;
-
-    // iOS Safari workaround
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    const v3 = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&key=${encodeURIComponent(DRIVE_API_KEY)}`;
-    if (isIOS) return v3;
-
-    const swSrc = `/drivepdf/${id}`;
-    try {
-      const probe = await fetch(swSrc, { headers: { Range: 'bytes=0-0' } });
-      if (probe.ok) return swSrc;
-    } catch (_) {}
-
-    return v3;
+  const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
+  if (n) await upsertDoc(`note:${n.id}`, { type:'note', ...n });
+  fi.value = '';
+  loadNotes();
+});
+imageList.addEventListener('click', async (e)=>{
+  const btn = e.target.closest('button');
+  const noteCard = e.target.closest('.card');
+  if (btn) {
+    const id = Number(btn.dataset.id);
+    if (btn.dataset.act === 'save-cap') {
+      const cap = noteCard.querySelector('input.cap').value;
+      driver.exec(`update notes set title=? where id=?`, [cap, id]);
+      const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
+      if (n) await upsertDoc(`note:${n.id}`, { type:'note', ...n });
+    } else if (btn.dataset.act === 'del-imgnote') {
+      if (!confirm('Delete this image note (and all its pages)?')) return;
+      await deleteDoc(`note:${id}`);
+      await deleteImageNoteCascade(id);
+      loadNotes();
+    }
+    return;
   }
-
-  async function openPdfInModal(title, urlOrId) {
-    viewer.innerHTML = '';
-    modal.style.display = 'block';
-    titleBar.textContent = title || 'PDF';
-    metaEl.textContent = 'Loading…';
-
-    const src = await pickPdfSource(urlOrId);
-
-    let pdfjsLib, workerSrc;
-    try {
-      ({ pdfjsLib, workerSrc } = await loadPdfJs());
-      pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
-    } catch (e) {
-      metaEl.textContent = 'Failed to load viewer.';
-      console.error(e);
-      return;
-    }
-
-    let pdf;
-    try {
-      const loadingTask = pdfjsLib.getDocument({
-        url: src,
-        disableStream: false,
-        disableAutoFetch: true,
-        rangeChunkSize: 4 * 1024 * 1024
-      });
-      pdf = await loadingTask.promise;
-    } catch (e) {
-      metaEl.textContent = `Could not open this PDF. ${e?.message || e}`;
-      console.error('pdf.js getDocument failed', { error: e, src });
-      return;
-    }
-
-    metaEl.textContent = `${pdf.numPages} pages`;
-
-    const BATCH = 10, SCALE = 1.5;
-
-    const pageIO = new IntersectionObserver(async (entries) => {
-      for (const e of entries) {
-        const el = e.target;
-        if (!e.isIntersecting || el.dataset.rendered) continue;
-        try {
-          const n = +el.dataset.page;
-          const page = await pdf.getPage(n);
-          const vp = page.getViewport({ scale: SCALE });
-          const canvas = el.querySelector('canvas');
-          const ctx = canvas.getContext('2d', { willReadFrequently: false });
-          const ratio = Math.min(2, devicePixelRatio || 1);
-          canvas.width  = Math.floor(vp.width * ratio);
-          canvas.height = Math.floor(vp.height * ratio);
-          canvas.style.width = vp.width + 'px';
-          canvas.style.height = vp.height + 'px';
-          await page.render({ canvasContext: ctx, viewport: vp }).promise;
-          el.dataset.rendered = '1';
-        } catch (err) {
-          el.innerHTML = '<div class="small" style="padding:8px">Render failed</div>';
-          console.error(err);
-        }
-      }
-    }, { root: viewer, rootMargin: '1000px 0px' });
-
-    const batchIO = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue;
-        appendBatch(+e.target.dataset.nextBatch);
-        batchIO.unobserve(e.target);
-      }
-    }, { root: viewer, rootMargin: '1200px 0px' });
-
-    function pageShell(n) {
-      const d = document.createElement('div');
-      d.className = 'page';
-      d.dataset.page = n;
-      d.innerHTML = '<canvas></canvas>';
-      pageIO.observe(d);
-      return d;
-    }
-    function sentinel(next) {
-      const s = document.createElement('div');
-      s.className = 'sentinel';
-      s.dataset.nextBatch = next;
-      s.textContent = 'Loading more pages…';
-      batchIO.observe(s);
-      return s;
-    }
-    function appendBatch(i) {
-      const start = i * BATCH + 1;
-      const end = Math.min(start + BATCH - 1, pdf.numPages);
-      if (start > pdf.numPages) return;
-      const frag = document.createDocumentFragment();
-      for (let p = start; p <= end; p++) frag.appendChild(pageShell(p));
-      if (end < pdf.numPages) frag.appendChild(sentinel(i + 1));
-      viewer.appendChild(frag);
-    }
-
-    appendBatch(0);
+  if (e.target.matches('.thumbs img')) {
+    openLightboxForNote(Number(e.target.dataset.note), Number(e.target.dataset.page));
+    return;
   }
+  if (e.target.matches('img.preview')) {
+    openLightboxForNote(Number(noteCard.dataset.noteid), 1);
+  }
+});
+pdfList.addEventListener('click', async (e)=>{
+  const b = e.target.closest('button'); 
+  const link = e.target.closest('a.link');
+  if (link) {
+    e.preventDefault();
+    const card = link.closest('.card');
+    const title = (card.querySelector('.pdftitle')?.value || 'PDF').trim();
+    const url = (card.querySelector('.pdfurl')?.value || link.getAttribute('href') || '').trim();
+    if (!url) return;
+    openPdfInModal(title, url);
+    return;
+  }
+  if (!b) return;
+  const id = Number(b.dataset.id);
+  if (b.dataset.act === 'save-pdf') {
+    const card  = b.closest('.card');
+    const title = card.querySelector('.pdftitle').value;
+    const url   = card.querySelector('.pdfurl').value;
+    driver.exec(`update notes set title=?, url=? where id=?`, [title, url, id]);
+    const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
+    if (n) await upsertDoc(`note:${n.id}`, { type:'note', ...n });
+  } else if (b.dataset.act === 'del-pdf') {
+    if (!confirm('Delete PDF link?')) return;
+    await deleteDoc(`note:${id}`);
+    driver.exec(`delete from notes where id=?`, [id]);
+    loadNotes();
+  }
+});
 
-  /* ---------- CouchDB Sync buttons ---------- */
-  document.getElementById('couchSync').addEventListener('click', async ()=>{
-    try{
-      couchMsgEl.textContent = 'Syncing…';
-      await couch.ensureDb();
+/* ---------- Lightbox ---------- */
+const lbEl    = document.getElementById('lightbox');
+const lbStack = document.getElementById('lbStack');
+const lbClose = document.querySelector('.lightbox-close');
+const lbVP    = lbEl.querySelector('.viewport');
+let lbZoom = 1; let lbURLs = new Set();
+function lbUpdateZoom(){ if (lbZoom===1){ lbEl.classList.remove('zoomed'); lbStack.style.setProperty('--z','1'); lbVP.scrollTop=lbVP.scrollLeft=0; } else { lbEl.classList.add('zoomed'); lbStack.style.setProperty('--z', String(lbZoom)); } }
+function lbRevoke(){ for (const u of lbURLs) { try { URL.revokeObjectURL(u); } catch(_){} } lbURLs.clear(); }
+function lbCloseAll(){ lbEl.classList.remove('show','zoomed'); lbEl.setAttribute('aria-hidden','true'); lbStack.innerHTML=''; lbZoom=1; lbRevoke(); }
+lbClose.addEventListener('click', ()=>{ if(lbZoom>1){ lbZoom=1; lbUpdateZoom(); } else lbCloseAll(); });
+lbEl.addEventListener('click', (e)=>{ if(e.target===lbEl) lbCloseAll(); });
+lbVP.addEventListener('click', (e)=>{ if(e.target===lbVP) lbCloseAll(); });
+document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') lbCloseAll(); });
+async function openLightboxForNote(noteId, startPage=1){
+  const note  = driver.select(`select title from notes where id=?`, [noteId])[0];
+  const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [noteId]);
+  if (!pages.length) {
+    const head = driver.select(`select path from notes where id=?`, [noteId])[0];
+    if (!head?.path) return;
+    pages.push({page:1, path:head.path});
+  }
+  lbStack.innerHTML = ''; lbRevoke();
+  for (const p of pages) {
+    const b = await readFile(p.path).catch(()=>null);
+    if (!b) continue;
+    const u = URL.createObjectURL(b);
+    lbURLs.add(u);
+    const im = document.createElement('img');
+    im.src = u;
+    im.alt = (note?.title||'image') + ` · p${p.page}`;
+    im.id  = `p${p.page}`;
+    lbStack.appendChild(im);
+  }
+  lbEl.classList.add('show'); lbEl.setAttribute('aria-hidden','false'); lbZoom=1; lbUpdateZoom();
+  const tgt = document.getElementById(`p${startPage}`); if (tgt) tgt.scrollIntoView({block:'start', behavior:'instant'});
+}
 
-      // Push docs
-      for (const s of driver.select(`select id,name,created_at from subjects`)) {
-        await upsertDoc(`subject:${s.id}`, { type:'subject', ...s });
-      }
-      for (const t of driver.select(`select id,subject_id,name,created_at from topics`)) {
-        await upsertDoc(`topic:${t.id}`, { type:'topic', ...t });
-      }
-      for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)) {
-        await upsertDoc(`chunk:${c.id}`, { type:'chunk', ...c });
-      }
-      for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)) {
-        await upsertDoc(`note:${n.id}`, { type:'note', ...n });
-      }
-
-      // Push image attachments (head + pages)
-      const imageNotes = driver.select(`select id,path from notes where kind='image'`);
-      for (const n of imageNotes) {
-        // head
-        if (n.path) {
-          const b = await readFile(n.path).catch(()=>null);
-          if (b) {
-            const ext = (n.path.split('.').pop()||'png').toLowerCase();
-            await putAttachment(`note:${n.id}`, attachmentName(n.path), b, `image/${ext}`);
-          }
-        }
-        // pages
-        const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [n.id]);
-        for (const p of pages) {
-          const b = await readFile(p.path).catch(()=>null);
-          if (!b) continue;
-          const ext = (p.path.split('.').pop()||'png').toLowerCase();
-          await putAttachment(`note:${n.id}`, attachmentName(p.path), b, `image/${ext}`);
-        }
-      }
-
-      const info = await couch.fetchJson('');
-      couchMsgEl.textContent = `Sync done. Docs: ${info.doc_count}`;
-    }catch(err){
-      couchMsgEl.textContent = 'Sync failed: ' + err.message;
-    }
-  });
-
-  // “Pull now” — fetch docs, merge, then fetch image attachments into IndexedDB
-  document.getElementById('couchPull').addEventListener('click', async ()=>{
-    try{
-      await couch.ensureDb();
-      const all = await couch.fetchJson('/_all_docs?include_docs=true');
-
-      // Bucket docs by type
-      const buckets = { subject: [], topic: [], chunk: [], note: [] };
-      for (const row of all.rows) {
-        const d = row.doc;
-        if (!d || d._deleted || !d.type || !(d.type in buckets)) continue;
-        buckets[d.type].push(d);
-      }
-
-      // Helper: numeric id (fallback from _id like "topic:12")
-      const numId = (d) => {
-        const asNum = Number(d.id);
-        if (Number.isFinite(asNum) && asNum > 0) return asNum;
-        const m = String(d._id||'').match(/^(subject|topic|chunk|note):(\d+)$/);
-        if (m) return Number(m[2]);
-        throw new Error(`Bad id on ${d.type} ${d._id||''}`);
-      };
-      const now = () => Math.floor(Date.now()/1000);
-
-      // Transaction for docs
-      driver.exec('BEGIN');
+/* ---------- PDF viewer (chunked & Drive-aware) ---------- */
+async function loadPdfJs() {
+  try { const mod = await import('/lib/pdfjs/pdf.mjs'); return { pdfjsLib: mod, workerSrc: '/lib/pdfjs/pdf.worker.mjs' }; }
+  catch { const base = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/'; const mod = await import(base + 'pdf.mjs'); return { pdfjsLib: mod, workerSrc: base + 'pdf.worker.mjs' }; }
+}
+function extractDriveId(s) {
+  if (!s) return '';
+  if (/^[A-Za-z0-9_-]{20,}$/.test(s)) return s;
+  try { const u = new URL(s); const m1 = u.pathname.match(/\/file\/d\/([^/]+)/); if (m1) return m1[1]; return u.searchParams.get('id') || ''; }
+  catch { return ''; }
+}
+const modal = document.getElementById('pdfModal');
+const viewer = document.getElementById('pdfViewer');
+const titleBar = document.getElementById('pdfTitleBar');
+const metaEl = document.getElementById('pdfMeta');
+const closeBtn = document.getElementById('pdfClose');
+function closePdfModal() { modal.style.display='none'; viewer.innerHTML=''; metaEl.textContent=''; }
+closeBtn.addEventListener('click', closePdfModal);
+modal.addEventListener('click', (e)=>{ if (e.target === modal) closePdfModal(); });
+document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape') closePdfModal(); });
+async function pickPdfSource(urlOrId){
+  const id = extractDriveId(urlOrId);
+  if (!id) return urlOrId;
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const v3 = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&key=${encodeURIComponent(DRIVE_API_KEY)}`;
+  if (isIOS) return v3;
+  const swSrc = `/drivepdf/${id}`;
+  try { const probe = await fetch(swSrc, { headers: { Range: 'bytes=0-0' } }); if (probe.ok) return swSrc; } catch (_){}
+  return v3;
+}
+async function openPdfInModal(title, urlOrId) {
+  viewer.innerHTML = ''; modal.style.display = 'block'; titleBar.textContent = title || 'PDF'; metaEl.textContent = 'Loading…';
+  const src = await pickPdfSource(urlOrId);
+  let pdfjsLib, workerSrc;
+  try { ({ pdfjsLib, workerSrc } = await loadPdfJs()); pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc; }
+  catch (e) { metaEl.textContent = 'Failed to load viewer.'; console.error(e); return; }
+  let pdf;
+  try { pdf = await pdfjsLib.getDocument({ url: src, disableStream:false, disableAutoFetch:true, rangeChunkSize: 4*1024*1024 }).promise; }
+  catch (e) { metaEl.textContent = `Could not open this PDF. ${e?.message || e}`; console.error('pdf.js getDocument failed', { error:e, src }); return; }
+  metaEl.textContent = `${pdf.numPages} pages`;
+  const BATCH = 10, SCALE = 1.5;
+  const pageIO = new IntersectionObserver(async (entries) => {
+    for (const e of entries) {
+      const el = e.target; if (!e.isIntersecting || el.dataset.rendered) continue;
       try {
-        for (const s of buckets.subject) {
-          const id = numId(s);
-          driver.exec(
-            `insert into subjects(id,name,created_at) values(?,?,?)
-             on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
-            [id, s.name||'', s.created_at||now()]
-          );
-        }
-        for (const t of buckets.topic) {
-          const id = numId(t);
-          driver.exec(
-            `insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
-             on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
-            [id, Number(t.subject_id)||0, t.name||'', t.created_at||now()]
-          );
-        }
-        for (const c of buckets.chunk) {
-          const id = numId(c);
-          driver.exec(
-            `insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
-             on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
-            [id, Number(c.topic_id)||0, c.name||'', c.created_at||now()]
-          );
-        }
-        for (const n of buckets.note) {
-          const id = numId(n);
-          driver.exec(
-            `insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
-             values(?,?,?,?,?,?,?,?)
-             on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
-                                     title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
-            [id, n.scope||'chunk', Number(n.scope_id)||0, n.kind||'image',
-             n.title||'', n.path||'', n.url||'', n.created_at||now()]
-          );
-        }
-        driver.exec('COMMIT');
-      } catch (e) {
-        driver.exec('ROLLBACK'); throw e;
-      }
-
-      // Pull image attachments → IndexedDB, and (re)create image_pages
-      for (const n of buckets.note) {
-        if (n.kind !== 'image' || !n._attachments) continue;
-        const noteId = numId(n);
-        for (const name in n._attachments) {
-          const path = '/' + name;
-          const have = await readFile(path).catch(()=>null);
-          if (!have) {
-            try {
-              const blob = await downloadAttachment(n._id || `note:${noteId}`, name);
-              await writeBlob(path, blob);
-            } catch (err) { console.warn('download attach failed', n._id, name, err); }
-          }
-          // Upsert image_pages with page number parsed from name (p{num}.ext)
-          let page = 1;
-          const m = name.match(/p(\d+)\./i);
-          if (m) page = Number(m[1]);
-          driver.exec(
-            `insert into image_pages(note_id,page,path) values(?,?,?)
-             on conflict(note_id,page) do update set path=excluded.path`,
-            [noteId, page, path]
-          );
-        }
-      }
-
-      couchMsgEl.textContent = 'Pulled changes.';
-      loadTree();
-    } catch (err) {
-      couchMsgEl.textContent = 'Pull failed: ' + err.message;
+        const n = +el.dataset.page; const page = await pdf.getPage(n);
+        const vp = page.getViewport({ scale: SCALE });
+        const canvas = el.querySelector('canvas'); const ctx = canvas.getContext('2d', { willReadFrequently:false });
+        const ratio = Math.min(2, devicePixelRatio || 1);
+        canvas.width = Math.floor(vp.width*ratio); canvas.height = Math.floor(vp.height*ratio);
+        canvas.style.width = vp.width + 'px'; canvas.style.height = vp.height + 'px';
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        el.dataset.rendered='1';
+      } catch (err) { el.innerHTML = '<div class="small" style="padding:8px">Render failed</div>'; console.error(err); }
     }
-  });
+  }, { root: viewer, rootMargin: '1000px 0px' });
+  const batchIO = new IntersectionObserver((entries) => {
+    for (const e of entries) { if (!e.isIntersecting) continue; appendBatch(+e.target.dataset.nextBatch); batchIO.unobserve(e.target); }
+  }, { root: viewer, rootMargin: '1200px 0px' });
+  function pageShell(n){ const d=document.createElement('div'); d.className='page'; d.dataset.page=n; d.innerHTML='<canvas></canvas>'; pageIO.observe(d); return d; }
+  function sentinel(next){ const s=document.createElement('div'); s.className='sentinel'; s.dataset.nextBatch=next; s.textContent='Loading more pages…'; batchIO.observe(s); return s; }
+  function appendBatch(i){ const start=i*BATCH+1; const end=Math.min(start+BATCH-1, pdf.numPages); if (start>pdf.numPages) return; const frag=document.createDocumentFragment(); for (let p=start;p<=end;p++) frag.appendChild(pageShell(p)); if (end<pdf.numPages) frag.appendChild(sentinel(i+1)); viewer.appendChild(frag); }
+  appendBatch(0);
+}
 
-  /* init */
-  setStatus('DB: OK (IndexedDB)');
-  loadTree();
+/* ---------- CouchDB panel buttons ---------- */
+document.getElementById('couchSave').addEventListener('click', ()=>{
+  couch.cfg.url  = document.getElementById('couchUrl').value.trim();
+  couch.cfg.db   = document.getElementById('couchDb').value.trim();
+  couch.cfg.user = document.getElementById('couchUser').value.trim();
+  const pw       = document.getElementById('couchPass').value;
+  if (pw) couch.cfg.pass = pw;
+  couch.save();
+  couchMsgEl.textContent = 'Saved Couch settings.';
+});
+document.getElementById('couchTest').addEventListener('click', async ()=>{
+  try { const info = (await couch.ensureDb()) || (await couch.fetchJson('')); couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`; }
+  catch (err) { couchMsgEl.textContent = 'Test failed: ' + err.message; }
+});
+
+// Push ALL (metadata only; images attach on-demand above)
+document.getElementById('couchSync').addEventListener('click', async ()=>{
+  try{
+    couchMsgEl.textContent = 'Syncing…';
+    await couch.ensureDb();
+    for (const s of driver.select(`select id,name,created_at from subjects`)) await upsertDoc(`subject:${s.id}`, { type:'subject', ...s });
+    for (const t of driver.select(`select id,subject_id,name,created_at from topics`)) await upsertDoc(`topic:${t.id}`, { type:'topic', ...t });
+    for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)) await upsertDoc(`chunk:${c.id}`, { type:'chunk', ...c });
+    for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)) await upsertDoc(`note:${n.id}`, { type:'note', ...n });
+    await refreshDbInfo('Sync done.');
+  }catch(err){ couchMsgEl.textContent = 'Sync failed: ' + err.message; }
+});
+
+// Pull ALL (and fetch image attachments)
+document.getElementById('couchPull').addEventListener('click', async ()=>{
+  try{
+    await couch.ensureDb();
+    const all = await couch.fetchJson('/_all_docs?include_docs=true');
+    const buckets = { subject:[], topic:[], chunk:[], note:[] };
+    for (const row of all.rows) {
+      const d=row.doc; if(!d||d._deleted||!d.type||!(d.type in buckets)) continue; buckets[d.type].push(d);
+    }
+    const numId = (d)=>{ const asNum=Number(d.id); if(Number.isFinite(asNum)&&asNum>0) return asNum; const m=String(d._id||'').match(/^(subject|topic|chunk|note):(\d+)$/); if(m) return Number(m[2]); throw new Error(`Bad id on ${d.type} ${d._id||''}`); };
+    const now = ()=>Math.floor(Date.now()/1000);
+    driver.exec('BEGIN');
+    try{
+      for (const s of buckets.subject){ const id=numId(s); driver.exec(`insert into subjects(id,name,created_at) values(?,?,?) on conflict(id) do update set name=excluded.name,created_at=excluded.created_at`, [id,s.name||'',s.created_at||now()]); }
+      for (const t of buckets.topic){ const id=numId(t); driver.exec(`insert into topics(id,subject_id,name,created_at) values(?,?,?,?) on conflict(id) do update set subject_id=excluded.subject_id,name=excluded.name,created_at=excluded.created_at`, [id,Number(t.subject_id)||0,t.name||'',t.created_at||now()]); }
+      for (const c of buckets.chunk){ const id=numId(c); driver.exec(`insert into chunks(id,topic_id,name,created_at) values(?,?,?,?) on conflict(id) do update set topic_id=excluded.topic_id,name=excluded.name,created_at=excluded.created_at`, [id,Number(c.topic_id)||0,c.name||'',c.created_at||now()]); }
+      for (const n of buckets.note){
+        const id=numId(n);
+        driver.exec(`insert into notes(id,scope,scope_id,kind,title,path,url,created_at) values(?,?,?,?,?,?,?,?) on conflict(id) do update set scope=excluded.scope,scope_id=excluded.scope_id,kind=excluded.kind,title=excluded.title,path=excluded.path,url=excluded.url,created_at=excluded.created_at`,
+          [id,n.scope||'chunk',Number(n.scope_id)||0,n.kind||'image',n.title||'',n.path||'',n.url||'',n.created_at||now()]);
+      }
+      driver.exec('COMMIT');
+    }catch(e){ driver.exec('ROLLBACK'); throw e; }
+
+    // pull attachments for image notes
+    for (const n of buckets.note) { if (n.kind==='image') await pullAttachmentsForNote(n); }
+
+    couchMsgEl.textContent = 'Pulled changes.';
+    loadTree();
+  } catch (err) {
+    couchMsgEl.textContent = 'Pull failed: ' + err.message;
+  }
+});
+
+/* ---------- init ---------- */
+setStatus('DB: OK (IndexedDB)');
+await refreshDbInfo();
+loadTree();
 })();
 </script>
 </body>
