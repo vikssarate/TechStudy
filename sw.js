@@ -5,45 +5,46 @@
    - Same-origin GET requests only; ignores blob: and cross-origin (e.g., CouchDB)
    - Navigation Preload for faster first paint
    - Supports "skipWaiting" via postMessage
-   - + Google Drive PDF endpoint: /drivepdf/:id → 4 MB tiles cached in PouchDB
+   - + Google Drive PDF endpoint: <scope>/drivepdf/:id → 4 MB tiles cached in PouchDB (when present)
 */
 
 const APP_NS = 'techstudy';
-const VERSION = 'v4'; // ↑ bump version
+const VERSION = 'v5'; // bump when you change the SW
 const CACHE_NAME = `study-notes-${APP_NS}-${VERSION}`;
+
+// Scope-aware base path (works for GitHub Pages project sites too)
+const SCOPE_PATH = new URL(self.registration?.scope || self.location.href).pathname.replace(/\/+$/, '') + '/';
 
 // ---- Google Drive chunking config ----
 const TILE_SIZE = 4 * 1024 * 1024;          // 4 MB tiles
-const CHUNK_DB_NAME = 'pdf-chunks';         // local tile DB (can be replicated to CouchDB)
-const DRIVE_API_KEY = 'YOUR_GOOGLE_API_KEY';// restrict to your domain + Drive API
+const CHUNK_DB_NAME = 'pdf-chunks';
+const DRIVE_API_KEY = 'YOUR_GOOGLE_API_KEY';  // <- set this (restricted) for best results
 const DRIVE_PROXY = ''; // optional: e.g., 'https://driveproxy.techstudy.me?id='
-                        // If DRIVE_API_KEY is empty, code will use DRIVE_PROXY?id=<fileId>
 
-// PouchDB in SW (for tile cache). If not present, we still stream (no offline cache).
+// Try to enable PouchDB tile cache (optional)
 let TileDB = null;
-try { importScripts('/lib/pouchdb.min.js'); TileDB = new self.PouchDB(CHUNK_DB_NAME); } catch (_) { /* optional */ }
+try { importScripts('./lib/pouchdb.min.js'); TileDB = new self.PouchDB(CHUNK_DB_NAME); } catch (_) { /* tile cache disabled */ }
 
-// Precache core app files (add PouchDB so SW installs cleanly offline)
+// Precache core app files (paths are relative to SW file)
 const CORE_ASSETS = [
   './',
   './index.html',
   './lib/sqljs/sql-wasm.js',
   './lib/sqljs/sql-wasm.wasm',
-  '/lib/pouchdb.min.js', // ← add this file to your repo
-  // './manifest.webmanifest',
+  './lib/pouchdb.min.js', // ok if missing; install continues
 ];
 
-// --- Install: pre-cache core assets ---
+// --- Install: precache ---
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(CORE_ASSETS))
+      .catch(()=>{})
       .then(() => self.skipWaiting())
-      .catch(() => {}) // ignore if offline on first install
   );
 });
 
-// --- Activate: clean old caches for THIS namespace only + enable nav preload ---
+// --- Activate: cleanup + nav preload ---
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
@@ -75,78 +76,147 @@ function cacheKeyFor(request) {
   });
 }
 
-// ---- Google Drive helpers ----
-function driveUpstreamURL(fileId) {
-  if (DRIVE_API_KEY && DRIVE_API_KEY !== 'YOUR_GOOGLE_API_KEY') {
-    return `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${DRIVE_API_KEY}`;
-  }
-  if (DRIVE_PROXY) return `${DRIVE_PROXY}${encodeURIComponent(fileId)}`;
-  // Fallback: API without key (only works for some public files; recommend proxy/key)
-  return `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+/* -------------------- Google Drive helpers -------------------- */
+
+function driveCandidates(fileId) {
+  const withKey = DRIVE_API_KEY && DRIVE_API_KEY !== 'YOUR_GOOGLE_API_KEY'
+    ? `&key=${encodeURIComponent(DRIVE_API_KEY)}`
+    : '';
+
+  // Try Drive v3 (CORS), then fallback public endpoints (may or may not CORS).
+  // We only *read bytes* from endpoints that actually give us CORS.
+  return [
+    { url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media${withKey}`, cors: true },
+    // Fallbacks (best-effort). If these don’t give CORS we’ll stream without caching.
+    { url: `https://drive.google.com/uc?export=download&id=${fileId}`, cors: false },
+    { url: `https://lh3.googleusercontent.com/d/${fileId}`, cors: false },
+  ];
 }
 
-async function getTotalSize(upstream) {
-  // Try HEAD first
+async function getTotalSize(upstreamUrl) {
   try {
-    const head = await fetch(upstream, { method: 'HEAD' });
+    const head = await fetch(upstreamUrl, { method: 'HEAD', redirect: 'follow' });
     const len = +head.headers.get('Content-Length');
     if (len > 0) return len;
   } catch {}
-  // Fallback: probe 0-0
   try {
-    const probe = await fetch(upstream, { headers: { Range: 'bytes=0-0' } });
+    const probe = await fetch(upstreamUrl, { headers: { Range: 'bytes=0-0' }, redirect: 'follow' });
     const cr = probe.headers.get('Content-Range'); // "bytes 0-0/12345"
     if (cr) return parseInt(cr.split('/')[1], 10);
   } catch {}
-  return 0;
+  return 0; // unknown
+}
+
+async function fetchTile(upstreamUrl, start, end, allowReadBytes) {
+  const resp = await fetch(upstreamUrl, { headers: { Range: `bytes=${start}-${end}` }, redirect: 'follow' });
+
+  // If CORS is allowed we can read bytes for caching/slicing.
+  if (allowReadBytes && resp.ok) {
+    const buf = await resp.arrayBuffer();
+    return new Blob([buf], { type: 'application/octet-stream' });
+  }
+
+  // Otherwise return the whole Response so we can pass it through.
+  return resp; // may be opaque; handled by caller
 }
 
 async function handleDrivePdf(req, url) {
-  const fileId = url.pathname.split('/').pop();
-  const upstream = driveUpstreamURL(fileId);
+  // Match <scope>/drivepdf/<id>
+  const prefix = SCOPE_PATH + 'drivepdf/';
+  const fileId = url.pathname.slice(prefix.length).split('/')[0];
+
+  const cands = driveCandidates(fileId);
+
+  // Prefer a CORS-capable upstream for chunking; fallback to pass-through
+  let upstream = cands[0].url;
+  let allowRead = cands[0].cors;
+
+  // If you didn’t set an API key, try fallbacks
+  if (DRIVE_API_KEY === 'YOUR_GOOGLE_API_KEY' || !DRIVE_API_KEY) {
+    // We’ll still try v3 first (sometimes works even w/out key for fully public files),
+    // but if HEAD/probe fails we’ll pass-through from uc/lh3.
+  }
+
   const range = req.headers.get('range');
 
-  // If no Range (rare with PDF.js), pass through
-  if (!range) return fetch(upstream);
+  // If no Range (rare with pdf.js), pass through best upstream
+  if (!range) {
+    // Pass-through (no caching)
+    return fetch(upstream, { redirect: 'follow' });
+  }
 
-  const totalSize = await getTotalSize(upstream);
-  const m = /bytes=(\d+)-(\d*)/.exec(range);
-  let start = parseInt(m?.[1] ?? '0', 10);
-  const requestedEnd = m?.[2] ? parseInt(m[2], 10) : Math.min(start + TILE_SIZE - 1, Math.max(0, totalSize - 1));
+  // Figure out total size from the best candidate that responds
+  let totalSize = await getTotalSize(upstream);
 
-  // We serve exactly one 4MB tile per response (PDF.js will ask for the rest)
-  const tileIndex = Math.floor(start / TILE_SIZE);
-  const tileStart = tileIndex * TILE_SIZE;
-  const tileEnd = totalSize ? Math.min(tileStart + TILE_SIZE - 1, totalSize - 1) : tileStart + TILE_SIZE - 1;
-  const end = Math.min(tileEnd, requestedEnd);
-
-  let tileBlob = null;
-
-  // Try local tile cache
-  if (TileDB) {
-    const docId = `pdf:${fileId}:chunk:${String(tileIndex).padStart(6, '0')}`;
-    try {
-      tileBlob = await TileDB.getAttachment(docId, 'bin');
-    } catch {}
-    // Cache miss → fetch from Drive and store
-    if (!tileBlob) {
-      const resp = await fetch(upstream, { headers: { Range: `bytes=${tileStart}-${tileEnd}` } });
-      const buf = await resp.arrayBuffer();
-      tileBlob = new Blob([buf], { type: 'application/octet-stream' });
-      // store (ignore races)
+  if (!totalSize) {
+    // Try other candidates to discover size
+    for (let i = 1; i < cands.length && !totalSize; i++) {
       try {
-        await TileDB.put({
-          _id: docId,
-          fileId, tileIndex, tileStart, tileEnd, chunkSize: TILE_SIZE,
-          _attachments: { bin: { content_type: 'application/octet-stream', data: tileBlob } }
-        });
+        const size = await getTotalSize(cands[i].url);
+        if (size) {
+          upstream = cands[i].url;
+          allowRead = cands[i].cors;
+          totalSize = size;
+          break;
+        }
       } catch {}
     }
-  } else {
-    // No PouchDB available in SW → just stream directly (no offline cache)
-    const resp = await fetch(upstream, { headers: { Range: `bytes=${tileStart}-${tileEnd}` } });
-    const buf = await resp.arrayBuffer();
-    tileBlob = new Blob([buf], { type: 'application/octet-stream' });
+  }
+
+  // Parse requested range
+  const m = /bytes=(\d+)-(\d*)/.exec(range);
+  let start = parseInt(m?.[1] ?? '0', 10);
+  const requestedEnd = m?.[2] ? parseInt(m[2], 10) : start + TILE_SIZE - 1;
+
+  // Serve exactly one tile so pdf.js will keep asking sequentially
+  const tileIndex = Math.floor(start / TILE_SIZE);
+  const tileStart = tileIndex * TILE_SIZE;
+  const tileEnd = totalSize ? Math.min(tileStart + TILE_SIZE - 1, totalSize - 1) : (tileStart + TILE_SIZE - 1);
+  const end = Math.min(tileEnd, requestedEnd);
+
+  // Try local PouchDB tile cache
+  if (TileDB && allowRead) {
+    const docId = `pdf:${fileId}:chunk:${String(tileIndex).padStart(6, '0')}`;
+
+    try {
+      const cached = await TileDB.getAttachment(docId, 'bin');
+      if (cached) {
+        const offset = start - tileStart;
+        const slice = cached.slice(offset, offset + (end - start + 1), 'application/pdf');
+        return new Response(slice, {
+          status: 206,
+          headers: {
+            'Content-Type': 'application/pdf',
+            'Accept-Ranges': 'bytes',
+            'Content-Range': `bytes ${start}-${end}/${totalSize || '*'}`,
+            'Content-Length': String(slice.size),
+          }
+        });
+      }
+    } catch {}
+  }
+
+  // Cache miss or no CORS → fetch from upstream
+  const got = await fetchTile(upstream, tileStart, tileEnd, allowRead);
+
+  // If we got a full Response (no CORS), just pass it through
+  if (got instanceof Response) {
+    // Let the browser handle it (we can’t read/reshape opaque responses)
+    return got;
+  }
+
+  // We have a Blob (CORS allowed). Store tile for offline, then slice and respond
+  const tileBlob = got;
+
+  if (TileDB && allowRead) {
+    try {
+      const docId = `pdf:${fileId}:chunk:${String(tileIndex).padStart(6, '0')}`;
+      await TileDB.put({
+        _id: docId,
+        fileId, tileIndex, tileStart, tileEnd, chunkSize: TILE_SIZE,
+        _attachments: { bin: { content_type: 'application/octet-stream', data: tileBlob } }
+      });
+    } catch {}
   }
 
   const offset = start - tileStart;
@@ -158,24 +228,25 @@ async function handleDrivePdf(req, url) {
       'Content-Type': 'application/pdf',
       'Accept-Ranges': 'bytes',
       'Content-Range': `bytes ${start}-${end}/${totalSize || '*'}`,
-      'Content-Length': String(slice.size)
+      'Content-Length': String(slice.size),
     }
   });
 }
 
-// --- Fetch strategy (HTML/network-first; assets/SWR) + Drive/RANGE handling ---
+/* -------------------- Fetch strategy -------------------- */
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-
-  // Only same-origin GET
   if (req.method !== 'GET') return;
+
   const url = new URL(req.url);
+
+  // Only handle same-origin requests within SW scope
   if (url.origin !== self.location.origin) return;
-  if (url.protocol !== 'https:' && url.origin !== 'http://localhost') return;
+  if (url.protocol !== 'https:' && !url.origin.startsWith('http://localhost')) return;
   if (url.href.startsWith('blob:')) return;
 
-  // 0) Google Drive virtual endpoint
-  if (url.pathname.startsWith('/drivepdf/')) {
+  // 0) Google Drive virtual endpoint: <scope>/drivepdf/:id
+  if (url.pathname.startsWith(SCOPE_PATH + 'drivepdf/')) {
     event.respondWith(handleDrivePdf(req, url));
     return;
   }
