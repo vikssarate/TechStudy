@@ -829,6 +829,133 @@ async function openLightboxForNote(noteId, startPage=1){
       return u.searchParams.get('id') || '';
     } catch { return ''; }
   }
+  // one-time modal wiring (add once)
+const modal = document.getElementById('pdfModal');
+const viewer = document.getElementById('pdfViewer');
+const titleBar = document.getElementById('pdfTitleBar');
+const metaEl = document.getElementById('pdfMeta');
+const closeBtn = document.getElementById('pdfClose');
+ 
+function closePdfModal() {
+  modal.style.display = 'none';
+  viewer.innerHTML = '';
+  metaEl.textContent = '';
+}
+closeBtn.addEventListener('click', closePdfModal);
+modal.addEventListener('click', (e) => { if (e.target === modal) closePdfModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePdfModal(); });
+
+async function openPdfInModal(title, urlOrId) {
+  // Show UI first and wire controls BEFORE any awaits
+  viewer.innerHTML = '';
+  modal.style.display = 'block';
+  titleBar.textContent = title || 'PDF';
+  metaEl.textContent = 'Loading…';
+
+  // Drive link → local SW endpoint
+  const id = extractDriveId(urlOrId);
+  const src = id ? `/drivepdf/${id}` : urlOrId;
+
+  let pdfjsLib, workerSrc;
+  try {
+    ({ pdfjsLib, workerSrc } = await loadPdfJs());
+    // workerSrc can be CDN or local; setting it is harmless on non-module-worker browsers
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
+  } catch (e) {
+    metaEl.textContent = 'Failed to load viewer.';
+    console.error(e);
+    return; // Close still works because handlers are already bound
+  }
+
+  let pdf;
+  try {
+    const loadingTask = pdfjsLib.getDocument({
+      url: src,
+      // enable chunked loading
+      disableStream: false,
+      disableAutoFetch: true,
+      rangeChunkSize: 4 * 1024 * 1024
+    });
+    pdf = await loadingTask.promise;
+  } catch (e) {
+    metaEl.textContent = 'Could not open this PDF. (Network or CORS?)';
+    console.error(e);
+    return;
+  }
+
+  metaEl.textContent = `${pdf.numPages} pages`;
+
+  const BATCH = 10, SCALE = 1.5;
+
+  const pageIO = new IntersectionObserver(async (entries) => {
+    for (const e of entries) {
+      const el = e.target;
+      if (!e.isIntersecting || el.dataset.rendered) continue;
+      try {
+        const n = +el.dataset.page;
+        const page = await pdf.getPage(n);
+        const vp = page.getViewport({ scale: SCALE });
+        const canvas = el.querySelector('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: false });
+        const ratio = Math.min(2, devicePixelRatio || 1);
+        canvas.width  = Math.floor(vp.width * ratio);
+        canvas.height = Math.floor(vp.height * ratio);
+        canvas.style.width = vp.width + 'px';
+        canvas.style.height = vp.height + 'px';
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        el.dataset.rendered = '1';
+      } catch (err) {
+        el.innerHTML = '<div class="small" style="padding:8px">Render failed</div>';
+        console.error(err);
+      }
+    }
+  }, { root: viewer, rootMargin: '1000px 0px' });
+
+  const batchIO = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      appendBatch(+e.target.dataset.nextBatch);
+      batchIO.unobserve(e.target);
+    }
+  }, { root: viewer, rootMargin: '1200px 0px' });
+
+  function pageShell(n) {
+    const d = document.createElement('div');
+    d.className = 'page';
+    d.dataset.page = n;
+    d.innerHTML = '<canvas></canvas>';
+    pageIO.observe(d);
+    return d;
+  }
+  function sentinel(next) {
+    const s = document.createElement('div');
+    s.className = 'sentinel';
+    s.dataset.nextBatch = next;
+    s.textContent = 'Loading more pages…';
+    batchIO.observe(s);
+    return s;
+  }
+  function appendBatch(i) {
+    const start = i * BATCH + 1;
+    const end = Math.min(start + BATCH - 1, pdf.numPages);
+    if (start > pdf.numPages) return;
+    const frag = document.createDocumentFragment();
+    for (let p = start; p <= end; p++) frag.appendChild(pageShell(p));
+    if (end < pdf.numPages) frag.appendChild(sentinel(i + 1));
+    viewer.appendChild(frag);
+  }
+
+  appendBatch(0);
+}
+
+function closePdfModal() {
+  modal.style.display = 'none';
+  viewer.innerHTML = '';
+  metaEl.textContent = '';
+}
+closeBtn.addEventListener('click', closePdfModal);
+modal.addEventListener('click', (e) => { if (e.target === modal) closePdfModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePdfModal(); });
 
   async function openPdfInModal(title, urlOrId) {
     const id = extractDriveId(urlOrId);
