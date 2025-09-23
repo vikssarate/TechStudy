@@ -844,6 +844,20 @@ function closePdfModal() {
 closeBtn.addEventListener('click', closePdfModal);
 modal.addEventListener('click', (e) => { if (e.target === modal) closePdfModal(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePdfModal(); });
+  async function pickPdfSource(urlOrId){
+  const id = extractDriveId(urlOrId);
+  if (!id) return urlOrId;
+
+  // Prefer the SW endpoint (range-friendly, same-origin)
+  const swSrc = `/drivepdf/${id}`;
+  try {
+    const probe = await fetch(swSrc, { headers: { Range: 'bytes=0-0' } });
+    if (probe.ok) return swSrc;
+  } catch (_) {}
+
+  // Fallback: direct Drive file (works if the file is shared "Anyone with the link")
+  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`;
+}
 
 async function openPdfInModal(title, urlOrId) {
   // Show UI first and wire controls BEFORE any awaits
@@ -853,8 +867,7 @@ async function openPdfInModal(title, urlOrId) {
   metaEl.textContent = 'Loading…';
 
   // Drive link → local SW endpoint
-  const id = extractDriveId(urlOrId);
-  const src = id ? `/drivepdf/${id}` : urlOrId;
+  const src = await pickPdfSource(urlOrId);
 
   let pdfjsLib, workerSrc;
   try {
