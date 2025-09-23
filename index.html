@@ -584,6 +584,229 @@ if ('serviceWorker' in navigator) {
   /* ---------- detail: notes (existing) ---------- */
   // (Image handling + PDF list rendering already above)
 
+  /* ---------- Notes UI (images + PDFs) + Lightbox (RESTORED) ---------- */
+
+// helpers already defined earlier: driver, writeBlob, readFile, rmFile, deleteImageNoteCascade, queue
+const imageList = document.getElementById('imageList');
+const pdfList   = document.getElementById('pdfList');
+
+/* Add PDF link */
+document.getElementById('addPdf').addEventListener('click', ()=>{
+  if (!details.scope) return;
+  const title = (document.getElementById('pdfTitle').value || '').trim() || 'PDF';
+  const url   = (document.getElementById('pdfUrl').value || '').trim();
+  if (!url) return alert('Add a valid URL');
+  driver.exec(`insert into notes(scope,scope_id,kind,title,url) values(?,?,?,?,?)`,
+    [details.scope, details.id, 'pdf', title, url]);
+  const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
+  queue(`note:${nid}`, 'note', 'upsert', {
+    id:nid, scope:details.scope, scope_id:details.id,
+    kind:'pdf', title, url, created_at:Math.floor(Date.now()/1000)
+  });
+  document.getElementById('pdfTitle').value='';
+  document.getElementById('pdfUrl').value='';
+  loadNotes();
+});
+
+/* Add new IMAGE note(s) */
+document.getElementById('imgInput').addEventListener('change', async (e)=>{
+  if (!details.scope) return;
+  for (const f of [...e.target.files]) {
+    const ext = (f.name.split('.').pop()||'png').toLowerCase();
+    const id  = crypto.randomUUID();
+    const previewPath = `/images/${details.scope}/${details.id}/${id}.${ext}`;
+    await writeBlob(previewPath, f);
+    driver.exec(`insert into notes(scope,scope_id,kind,title,path) values(?,?,?,?,?)`,
+      [details.scope, details.id, 'image', f.name, previewPath]);
+    const nid = driver.select(`select last_insert_rowid() as id`)[0].id;
+    driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [nid, 1, previewPath]);
+    queue(`note:${nid}`, 'note', 'upsert', {
+      id:nid, scope:details.scope, scope_id:details.id,
+      kind:'image', title:f.name, path:previewPath, created_at:Math.floor(Date.now()/1000)
+    });
+  }
+  e.target.value = '';
+  loadNotes();
+});
+
+/* Render notes for current selection */
+async function loadNotes(){
+  imageList.innerHTML = '';
+  pdfList.innerHTML   = '';
+
+  // --- IMAGE notes
+  const imgs = driver.select(`
+    select id,title,path from notes
+    where scope=? and scope_id=? and kind='image'
+    order by id desc`, [details.scope, details.id]);
+
+  for (const r of imgs) {
+    let previewPath = r.path;
+    const pages = driver.select(
+      `select id,page,path from image_pages where note_id=? order by page asc`, [r.id]
+    );
+    if (pages.length) previewPath = pages[0].path;
+
+    const prevBlob = await readFile(previewPath).catch(()=>null);
+    const prevURL  = prevBlob ? URL.createObjectURL(prevBlob) : '';
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.noteid = r.id;
+    card.innerHTML = `
+      ${prevURL ? `<img class="preview" src="${prevURL}" alt="${esc(r.title||'image')}"/>` : `<div class="small">Missing image</div>`}
+      <input type="text" value="${esc(r.title||'')}" placeholder="Caption" class="cap" data-id="${r.id}" style="margin-top:6px"/>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost slim" data-act="save-cap" data-id="${r.id}">Save</button>
+        <button class="warn slim" data-act="del-imgnote" data-id="${r.id}">Delete</button>
+      </div>
+      <div class="row" style="margin-top:6px;align-items:flex-start">
+        <label class="filelabel slim" for="pages-${r.id}">+ Pages</label>
+        <input id="pages-${r.id}" type="file" accept="image/*" multiple data-act="add-pages" data-id="${r.id}"/>
+        <div class="thumbs" id="thumbs-${r.id}"></div>
+      </div>`;
+    imageList.appendChild(card);
+
+    const thumbs = card.querySelector(`#thumbs-${r.id}`);
+    for (const p of pages) {
+      const b = await readFile(p.path).catch(()=>null);
+      if (!b) continue;
+      const u = URL.createObjectURL(b);
+      const t = document.createElement('img');
+      t.src = u; t.dataset.note = r.id; t.dataset.page = p.page;
+      thumbs.appendChild(t);
+    }
+  }
+
+  // --- PDF notes
+  const pdfs = driver.select(`
+    select id,title,url from notes
+    where scope=? and scope_id=? and kind='pdf'
+    order by id desc`, [details.scope, details.id]);
+
+  for (const r of pdfs) {
+    const row = document.createElement('div'); row.className = 'card';
+    row.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <input type="text" class="pdftitle" data-id="${r.id}" value="${esc(r.title||'PDF')}"/>
+        <button class="ghost slim" data-act="save-pdf" data-id="${r.id}">Save</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <input type="url" class="pdfurl" data-id="${r.id}" value="${esc(r.url||'')}"/>
+        <a class="link" href="${r.url||'#'}" target="_blank" rel="noopener">Open</a>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="warn slim" data-act="del-pdf" data-id="${r.id}">Delete</button>
+      </div>`;
+    pdfList.appendChild(row);
+  }
+}
+
+/* extra pages uploader */
+imageList.addEventListener('change', async (e)=>{
+  const fi = e.target.closest('input[type=file][data-act="add-pages"]');
+  if (!fi) return;
+  const noteId = Number(fi.dataset.id);
+  let next = driver.select(`select coalesce(max(page),0)+1 as n from image_pages where note_id=?`, [noteId])[0].n;
+  for (const f of [...fi.files]) {
+    const ext  = (f.name.split('.').pop()||'png').toLowerCase();
+    const id   = crypto.randomUUID();
+    const path = `/images/n${noteId}/${id}.${ext}`;
+    await writeBlob(path, f);
+    driver.exec(`insert into image_pages(note_id,page,path) values(?,?,?)`, [noteId, next++, path]);
+  }
+  const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [noteId])[0];
+  if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
+  fi.value = '';
+  loadNotes();
+});
+
+/* image card actions + lightbox open */
+imageList.addEventListener('click', async (e)=>{
+  const btn = e.target.closest('button');
+  const noteCard = e.target.closest('.card');
+  if (btn) {
+    const id = Number(btn.dataset.id);
+    if (btn.dataset.act === 'save-cap') {
+      const cap = noteCard.querySelector('input.cap').value;
+      driver.exec(`update notes set title=? where id=?`, [cap, id]);
+      const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
+      if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
+    } else if (btn.dataset.act === 'del-imgnote') {
+      if (!confirm('Delete this image note (and all its pages)?')) return;
+      queue(`note:${id}`, 'note', 'delete', null);
+      await deleteImageNoteCascade(id);
+      loadNotes();
+    }
+    return;
+  }
+  if (e.target.matches('.thumbs img')) {
+    openLightboxForNote(Number(e.target.dataset.note), Number(e.target.dataset.page));
+    return;
+  }
+  if (e.target.matches('img.preview')) {
+    openLightboxForNote(Number(noteCard.dataset.noteid), 1);
+  }
+});
+
+/* PDF save/delete */
+pdfList.addEventListener('click', async (e)=>{
+  const b = e.target.closest('button'); if (!b) return;
+  const id = Number(b.dataset.id);
+  if (b.dataset.act === 'save-pdf') {
+    const card  = b.closest('.card');
+    const title = card.querySelector('.pdftitle').value;
+    const url   = card.querySelector('.pdfurl').value;
+    driver.exec(`update notes set title=?, url=? where id=?`, [title, url, id]);
+    const n = driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes where id=?`, [id])[0];
+    if (n) queue(`note:${n.id}`, 'note', 'upsert', n);
+  } else if (b.dataset.act === 'del-pdf') {
+    if (!confirm('Delete PDF link?')) return;
+    queue(`note:${id}`, 'note', 'delete', null);
+    driver.exec(`delete from notes where id=?`, [id]);
+    loadNotes();
+  }
+});
+
+/* ---------- Lightbox (restored) ---------- */
+const lbEl    = document.getElementById('lightbox');
+const lbStack = document.getElementById('lbStack');
+const lbClose = document.querySelector('.lightbox-close');
+const lbVP    = lbEl.querySelector('.viewport');
+let lbZoom = 1;
+function lbUpdateZoom(){
+  if (lbZoom===1){ lbEl.classList.remove('zoomed'); lbStack.style.setProperty('--z','1'); lbVP.scrollTop=lbVP.scrollLeft=0; }
+  else { lbEl.classList.add('zoomed'); lbStack.style.setProperty('--z', String(lbZoom)); }
+}
+function lbCloseAll(){ lbEl.classList.remove('show','zoomed'); lbEl.setAttribute('aria-hidden','true'); lbStack.innerHTML=''; lbZoom=1; }
+lbClose.addEventListener('click', ()=>{ if(lbZoom>1){ lbZoom=1; lbUpdateZoom(); } else lbCloseAll(); });
+lbEl.addEventListener('click', (e)=>{ if(e.target===lbEl) lbCloseAll(); });
+lbVP.addEventListener('click', (e)=>{ if(e.target===lbVP) lbCloseAll(); });
+document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') lbCloseAll(); });
+
+async function openLightboxForNote(noteId, startPage=1){
+  const note  = driver.select(`select title from notes where id=?`, [noteId])[0];
+  const pages = driver.select(`select page,path from image_pages where note_id=? order by page asc`, [noteId]);
+  if (!pages.length) {
+    const head = driver.select(`select path from notes where id=?`, [noteId])[0];
+    if (!head?.path) return;
+    pages.push({page:1, path:head.path});
+  }
+  lbStack.innerHTML = '';
+  for (const p of pages) {
+    const b = await readFile(p.path).catch(()=>null);
+    if (!b) continue;
+    const u = URL.createObjectURL(b);
+    const im = document.createElement('img');
+    im.src = u;
+    im.alt = (note?.title||'image') + ` · p${p.page}`;
+    im.id  = `p${p.page}`;
+    lbStack.appendChild(im);
+  }
+  lbEl.classList.add('show'); lbEl.setAttribute('aria-hidden','false'); lbZoom=1; lbUpdateZoom();
+  const tgt = document.getElementById(`p${startPage}`); if (tgt) tgt.scrollIntoView({block:'start', behavior:'instant'});
+}
+
   /* ---------- Intercept "Open" to use chunked viewer (Google Drive or direct PDF) ---------- */
   // Robust PDF.js loader (local → CDN fallback)
   async function loadPdfJs() {
