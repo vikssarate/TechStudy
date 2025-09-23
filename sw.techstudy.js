@@ -9,7 +9,7 @@
 */
 
 const APP_NS = 'techstudy';
-const VERSION = 'v5'; // bump when you change the SW
+const VERSION = 'v8'; // bump when you change the SW
 const CACHE_NAME = `study-notes-${APP_NS}-${VERSION}`;
 
 // Scope-aware base path (works for GitHub Pages project sites too)
