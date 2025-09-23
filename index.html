@@ -1178,39 +1178,84 @@ if ('serviceWorker' in navigator) {
   });
 
   // “Pull now” (refreshes from _all_docs; simple merge)
-  document.getElementById('couchPull').addEventListener('click', async ()=>{
-    try{
-      await couch.ensureDb();
-      const all = await couch.fetchJson('/_all_docs?include_docs=true');
-      for (const row of all.rows) {
-        const doc = row.doc; if (!doc || doc._deleted) continue;
-        if (doc.type === 'subject') {
-          driver.exec(`insert into subjects(id,name,created_at) values(?,?,?)
-            on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
-            [doc.id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
-        } else if (doc.type === 'topic') {
-          driver.exec(`insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
-            on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
-            [doc.id, doc.subject_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
-        } else if (doc.type === 'chunk') {
-          driver.exec(`insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
-            on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
-            [doc.id, doc.topic_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
-        } else if (doc.type === 'note') {
-          driver.exec(`insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
-            values(?,?,?,?,?,?,?,?)
-            on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
-              title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
-            [doc.id, doc.scope, doc.scope_id, doc.kind, doc.title||'', doc.path||'', doc.url||'', doc.created_at||Math.floor(Date.now()/1000)]);
-        }
-      }
-      couchMsgEl.textContent = 'Pulled changes.';
-      loadTree();
-    }catch(err){
-      couchMsgEl.textContent = 'Pull failed: ' + err.message;
-    }
-  });
+  // “Pull now” — fetch all docs and apply in FK-safe order
+document.getElementById('couchPull').addEventListener('click', async ()=>{
+  try{
+    await couch.ensureDb();
+    const all = await couch.fetchJson('/_all_docs?include_docs=true');
 
+    // Bucket docs by type
+    const buckets = { subject: [], topic: [], chunk: [], note: [] };
+    for (const row of all.rows) {
+      const d = row.doc;
+      if (!d || d._deleted || !d.type || !(d.type in buckets)) continue;
+      buckets[d.type].push(d);
+    }
+
+    // Helper: numeric id (fallback from _id like "topic:12")
+    const numId = (d) => {
+      const asNum = Number(d.id);
+      if (Number.isFinite(asNum) && asNum > 0) return asNum;
+      const m = String(d._id||'').match(/^(subject|topic|chunk|note):(\d+)$/);
+      if (m) return Number(m[2]);
+      throw new Error(`Bad id on ${d.type} ${d._id||''}`);
+    };
+    const now = () => Math.floor(Date.now()/1000);
+
+    // Transaction
+    driver.exec('BEGIN');
+    try {
+      // 1) subjects
+      for (const s of buckets.subject) {
+        const id = numId(s);
+        driver.exec(
+          `insert into subjects(id,name,created_at) values(?,?,?)
+           on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
+          [id, s.name||'', s.created_at||now()]
+        );
+      }
+      // 2) topics
+      for (const t of buckets.topic) {
+        const id = numId(t);
+        driver.exec(
+          `insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
+           on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
+          [id, Number(t.subject_id)||0, t.name||'', t.created_at||now()]
+        );
+      }
+      // 3) chunks
+      for (const c of buckets.chunk) {
+        const id = numId(c);
+        driver.exec(
+          `insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
+           on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
+          [id, Number(c.topic_id)||0, c.name||'', c.created_at||now()]
+        );
+      }
+      // 4) notes
+      for (const n of buckets.note) {
+        const id = numId(n);
+        driver.exec(
+          `insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
+           values(?,?,?,?,?,?,?,?)
+           on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
+                                   title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
+          [id, n.scope||'chunk', Number(n.scope_id)||0, n.kind||'image',
+           n.title||'', n.path||'', n.url||'', n.created_at||now()]
+        );
+      }
+
+      driver.exec('COMMIT');
+    } catch (e) {
+      driver.exec('ROLLBACK'); throw e;
+    }
+
+    couchMsgEl.textContent = 'Pulled changes.';
+    loadTree();
+  } catch (err) {
+    couchMsgEl.textContent = 'Pull failed: ' + err.message;
+  }
+});
   /* init */
   setStatus('DB: OK (IndexedDB)');
   loadTree();
