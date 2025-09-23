@@ -706,6 +706,151 @@ if ('serviceWorker' in navigator) {
   /* ---------- Image lightbox + CouchDB sync sections remain as in your file ---------- */
   // (No changes needed here — your existing code below this point can remain.)
 
+  /* ---------- CouchDB Sync (Save/Test/Sync + Pull) ---------- */
+const couchCfgKey = 'couchCfg-techstudy';
+const couchMsgEl  = document.getElementById('couchMsg');
+
+const couch = {
+  cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
+  save(){ localStorage.setItem(couchCfgKey, JSON.stringify(this.cfg)); },
+  base(){
+    if(!this.cfg.url || !this.cfg.db) throw new Error('Set Couch URL and DB first.');
+    return this.cfg.url.replace(/\/+$/,'') + '/' + encodeURIComponent(this.cfg.db);
+  },
+  authHeader(){
+    if (this.cfg.user && this.cfg.pass) return 'Basic ' + btoa(this.cfg.user + ':' + this.cfg.pass);
+    return null;
+  },
+  async ensureDb(){
+    const r = await fetch(this.base(), {
+      method: 'GET',
+      headers: this.authHeader() ? { Authorization: this.authHeader() } : {},
+      credentials: 'include'
+    });
+    if (r.status === 404) throw new Error('DB not found. Create it once on the server.');
+    if (!r.ok) throw new Error(await r.text());
+    return r.json().catch(()=>null);
+  },
+  async fetchJson(path, opts = {}){
+    const headers = Object.assign(
+      { 'Accept': 'application/json' },
+      opts.headers || {},
+      this.authHeader() ? { 'Authorization': this.authHeader() } : {}
+    );
+    const res = await fetch(this.base() + path, { ...opts, headers, credentials: 'include' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+};
+
+// Prefill sensible defaults once
+if (!couch.cfg.url && !couch.cfg.db) {
+  couch.cfg = { url: 'https://couch.techstudy.me', db: 'engineering', user: '' };
+  couch.save();
+}
+// hydrate form on load
+(function hydrateCouchForm(){
+  document.getElementById('couchUrl').value  = couch.cfg.url  || '';
+  document.getElementById('couchDb').value   = couch.cfg.db   || '';
+  document.getElementById('couchUser').value = couch.cfg.user || '';
+  document.getElementById('couchPass').value = '';
+})();
+
+// Button: Save
+document.getElementById('couchSave').addEventListener('click', ()=>{
+  couch.cfg.url  = document.getElementById('couchUrl').value.trim();
+  couch.cfg.db   = document.getElementById('couchDb').value.trim();
+  couch.cfg.user = document.getElementById('couchUser').value.trim();
+  const pw       = document.getElementById('couchPass').value;
+  if (pw) couch.cfg.pass = pw;
+  couch.save();
+  couchMsgEl.textContent = 'Saved Couch settings.';
+});
+
+// Button: Test
+document.getElementById('couchTest').addEventListener('click', async ()=>{
+  try {
+    const info = (await couch.ensureDb()) || (await couch.fetchJson(''));
+    couchMsgEl.textContent = `OK: ${info.db_name} (doc count ${info.doc_count})`;
+  } catch (err) {
+    couchMsgEl.textContent = 'Test failed: ' + err.message;
+  }
+});
+
+// Minimal “Sync now” (push all local docs to CouchDB)
+document.getElementById('couchSync').addEventListener('click', async ()=>{
+  try{
+    couchMsgEl.textContent = 'Syncing…';
+    await couch.ensureDb();
+
+    // subjects/topics/chunks
+    for (const s of driver.select(`select id,name,created_at from subjects`)) {
+      await couch.fetchJson('/'+encodeURIComponent(`subject:${s.id}`), {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ _id:`subject:${s.id}`, type:'subject', ...s })
+      });
+    }
+    for (const t of driver.select(`select id,subject_id,name,created_at from topics`)) {
+      await couch.fetchJson('/'+encodeURIComponent(`topic:${t.id}`), {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ _id:`topic:${t.id}`, type:'topic', ...t })
+      });
+    }
+    for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)) {
+      await couch.fetchJson('/'+encodeURIComponent(`chunk:${c.id}`), {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ _id:`chunk:${c.id}`, type:'chunk', ...c })
+      });
+    }
+    // notes (metadata only; images/attachments can be added later)
+    for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)) {
+      await couch.fetchJson('/'+encodeURIComponent(`note:${n.id}`), {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ _id:`note:${n.id}`, type:'note', ...n })
+      });
+    }
+
+    const info = await couch.fetchJson('');
+    couchMsgEl.textContent = `Sync done. Docs: ${info.doc_count}`;
+  }catch(err){
+    couchMsgEl.textContent = 'Sync failed: ' + err.message;
+  }
+});
+
+// Minimal “Pull now” (refreshes from _all_docs; simple merge)
+document.getElementById('couchPull').addEventListener('click', async ()=>{
+  try{
+    await couch.ensureDb();
+    const all = await couch.fetchJson('/_all_docs?include_docs=true');
+    for (const row of all.rows) {
+      const doc = row.doc; if (!doc || doc._deleted) continue;
+      if (doc.type === 'subject') {
+        driver.exec(`insert into subjects(id,name,created_at) values(?,?,?)
+          on conflict(id) do update set name=excluded.name, created_at=excluded.created_at`,
+          [doc.id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+      } else if (doc.type === 'topic') {
+        driver.exec(`insert into topics(id,subject_id,name,created_at) values(?,?,?,?)
+          on conflict(id) do update set subject_id=excluded.subject_id, name=excluded.name, created_at=excluded.created_at`,
+          [doc.id, doc.subject_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+      } else if (doc.type === 'chunk') {
+        driver.exec(`insert into chunks(id,topic_id,name,created_at) values(?,?,?,?)
+          on conflict(id) do update set topic_id=excluded.topic_id, name=excluded.name, created_at=excluded.created_at`,
+          [doc.id, doc.topic_id, doc.name, doc.created_at||Math.floor(Date.now()/1000)]);
+      } else if (doc.type === 'note') {
+        driver.exec(`insert into notes(id,scope,scope_id,kind,title,path,url,created_at)
+          values(?,?,?,?,?,?,?,?)
+          on conflict(id) do update set scope=excluded.scope, scope_id=excluded.scope_id, kind=excluded.kind,
+            title=excluded.title, path=excluded.path, url=excluded.url, created_at=excluded.created_at`,
+          [doc.id, doc.scope, doc.scope_id, doc.kind, doc.title||'', doc.path||'', doc.url||'', doc.created_at||Math.floor(Date.now()/1000)]);
+      }
+    }
+    couchMsgEl.textContent = 'Pulled changes.';
+    loadTree();
+  }catch(err){
+    couchMsgEl.textContent = 'Pull failed: ' + err.message;
+  }
+});
+
   /* init */
   setStatus('DB: OK (IndexedDB)');
   loadTree();
