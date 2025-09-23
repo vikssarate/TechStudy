@@ -189,6 +189,9 @@ if ('serviceWorker' in navigator) {
     }
   };
 
+  /* --- Google Drive (UI fallback key) --- */
+  const DRIVE_API_KEY = 'AIzaSyDZHZkniW8lHSenR-6lSyidFRzCAWfK0l0';
+
   /* ---------- Robust sql.js loader (local → CDN fallback) ---------- */
   function loadScript(url){
     return new Promise((resolve,reject)=>{
@@ -917,7 +920,6 @@ if ('serviceWorker' in navigator) {
       return { pdfjsLib: mod, workerSrc: base + 'pdf.worker.mjs' };
     }
   }
-
   function extractDriveId(s) {
     if (!s) return '';
     if (/^[A-Za-z0-9_-]{20,}$/.test(s)) return s; // raw ID
@@ -946,15 +948,20 @@ if ('serviceWorker' in navigator) {
     const id = extractDriveId(urlOrId);
     if (!id) return urlOrId;
 
-    // Prefer the SW endpoint (range-friendly, same-origin)
+    // iOS Safari workaround: prefer direct Drive v3 (bypass SW + referrer weirdness)
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const v3 = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&key=${encodeURIComponent(DRIVE_API_KEY)}`;
+    if (isIOS) return v3;
+
+    // Prefer the SW endpoint (range-friendly, same-origin) if it responds
     const swSrc = `/drivepdf/${id}`;
     try {
       const probe = await fetch(swSrc, { headers: { Range: 'bytes=0-0' } });
       if (probe.ok) return swSrc;
     } catch (_) {}
 
-    // Fallback: direct Drive file (works if the file is shared "Anyone with the link")
-    return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`;
+    // Fallback: direct Drive v3
+    return v3;
   }
 
   async function openPdfInModal(title, urlOrId) {
@@ -985,8 +992,8 @@ if ('serviceWorker' in navigator) {
       });
       pdf = await loadingTask.promise;
     } catch (e) {
-      metaEl.textContent = 'Could not open this PDF. (Network or CORS?)';
-      console.error(e);
+      metaEl.textContent = `Could not open this PDF. ${e?.message || e}`;
+      console.error('pdf.js getDocument failed', { error: e, src });
       return;
     }
 
@@ -1065,7 +1072,6 @@ if ('serviceWorker' in navigator) {
     cfg: JSON.parse(localStorage.getItem(couchCfgKey) || '{}'),
     save(){ 
       const { url, db, user, pass } = this.cfg || {};
-      // Store pass only if explicitly provided (keeps prior behavior)
       localStorage.setItem(couchCfgKey, JSON.stringify({ url, db, user, ...(pass?{pass}: {}) })); 
     },
     base(){
@@ -1130,35 +1136,38 @@ if ('serviceWorker' in navigator) {
     }
   });
 
-  // Minimal “Sync now” (push all local docs to CouchDB)
+  /* --- Helper: CouchDB upsert with _rev to avoid conflicts --- */
+  async function upsertDoc(docId, body) {
+    let rev = null;
+    try {
+      const existing = await couch.fetchJson('/' + encodeURIComponent(docId), { method: 'GET' });
+      rev = existing._rev || null;
+    } catch (_) { /* 404 is fine */ }
+    const payload = rev ? { _id: docId, _rev: rev, ...body } : { _id: docId, ...body };
+    return couch.fetchJson('/' + encodeURIComponent(docId), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // “Sync now” (push all local docs to CouchDB) — conflict-safe
   document.getElementById('couchSync').addEventListener('click', async ()=>{
     try{
       couchMsgEl.textContent = 'Syncing…';
       await couch.ensureDb();
 
       for (const s of driver.select(`select id,name,created_at from subjects`)) {
-        await couch.fetchJson('/'+encodeURIComponent(`subject:${s.id}`), {
-          method:'PUT', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ _id:`subject:${s.id}`, type:'subject', ...s })
-        });
+        await upsertDoc(`subject:${s.id}`, { type:'subject', ...s });
       }
       for (const t of driver.select(`select id,subject_id,name,created_at from topics`)) {
-        await couch.fetchJson('/'+encodeURIComponent(`topic:${t.id}`), {
-          method:'PUT', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ _id:`topic:${t.id}`, type:'topic', ...t })
-        });
+        await upsertDoc(`topic:${t.id}`, { type:'topic', ...t });
       }
       for (const c of driver.select(`select id,topic_id,name,created_at from chunks`)) {
-        await couch.fetchJson('/'+encodeURIComponent(`chunk:${c.id}`), {
-          method:'PUT', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ _id:`chunk:${c.id}`, type:'chunk', ...c })
-        });
+        await upsertDoc(`chunk:${c.id}`, { type:'chunk', ...c });
       }
       for (const n of driver.select(`select id,scope,scope_id,kind,title,path,url,created_at from notes`)) {
-        await couch.fetchJson('/'+encodeURIComponent(`note:${n.id}`), {
-          method:'PUT', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ _id:`note:${n.id}`, type:'note', ...n })
-        });
+        await upsertDoc(`note:${n.id}`, { type:'note', ...n });
       }
 
       const info = await couch.fetchJson('');
@@ -1168,7 +1177,7 @@ if ('serviceWorker' in navigator) {
     }
   });
 
-  // Minimal “Pull now” (refreshes from _all_docs; simple merge)
+  // “Pull now” (refreshes from _all_docs; simple merge)
   document.getElementById('couchPull').addEventListener('click', async ()=>{
     try{
       await couch.ensureDb();
