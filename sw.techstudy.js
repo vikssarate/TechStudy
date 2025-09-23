@@ -9,7 +9,7 @@
 */
 
 const APP_NS = 'techstudy';
-const VERSION = 'v8'; // bump when you change the SW
+const VERSION = 'v9'; // bump when you change the SW
 const CACHE_NAME = `study-notes-${APP_NS}-${VERSION}`;
 
 // Scope-aware base path (works for GitHub Pages project sites too)
@@ -19,7 +19,8 @@ const SCOPE_PATH = new URL(self.registration?.scope || self.location.href).pathn
 const TILE_SIZE = 4 * 1024 * 1024;          // 4 MB tiles
 const CHUNK_DB_NAME = 'pdf-chunks';
 const DRIVE_API_KEY = 'YOUR_GOOGLE_API_KEY';  // <- set this (restricted) for best results
-const DRIVE_PROXY = ''; // optional: e.g., 'https://driveproxy.techstudy.me?id='
+// Optional proxy (must support Range + CORS), e.g. 'https://driveproxy.techstudy.me?id='
+const DRIVE_PROXY = ''; 
 
 // Try to enable PouchDB tile cache (optional)
 let TileDB = null;
@@ -32,14 +33,17 @@ const CORE_ASSETS = [
   './lib/sqljs/sql-wasm.js',
   './lib/sqljs/sql-wasm.wasm',
   './lib/pouchdb.min.js', // ok if missing; install continues
+
+  // PDF.js viewer bits (optional but nice for offline)
+  './lib/pdfjs/pdf.mjs',
+  './lib/pdfjs/pdf.worker.mjs',
 ];
 
 // --- Install: precache ---
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(CORE_ASSETS))
-      .catch(()=>{})
+      .then((cache) => cache.addAll(CORE_ASSETS).catch(()=>{}))
       .then(() => self.skipWaiting())
   );
 });
@@ -79,17 +83,22 @@ function cacheKeyFor(request) {
 /* -------------------- Google Drive helpers -------------------- */
 
 function driveCandidates(fileId) {
+  // If a proxy is configured, prefer it (assume CORS + Range)
+  if (DRIVE_PROXY) {
+    const base = DRIVE_PROXY.endsWith('=') || DRIVE_PROXY.endsWith('/') ? DRIVE_PROXY : DRIVE_PROXY + '?id=';
+    return [{ url: `${base}${encodeURIComponent(fileId)}`, cors: true, via: 'proxy' }];
+  }
+
   const withKey = DRIVE_API_KEY && DRIVE_API_KEY !== 'YOUR_GOOGLE_API_KEY'
     ? `&key=${encodeURIComponent(DRIVE_API_KEY)}`
     : '';
 
   // Try Drive v3 (CORS), then fallback public endpoints (may or may not CORS).
-  // We only *read bytes* from endpoints that actually give us CORS.
   return [
-    { url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media${withKey}`, cors: true },
+    { url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media${withKey}`, cors: true, via: 'v3' },
     // Fallbacks (best-effort). If these don’t give CORS we’ll stream without caching.
-    { url: `https://drive.google.com/uc?export=download&id=${fileId}`, cors: false },
-    { url: `https://lh3.googleusercontent.com/d/${fileId}`, cors: false },
+    { url: `https://drive.google.com/uc?export=download&id=${fileId}`, cors: false, via: 'uc' },
+    { url: `https://lh3.googleusercontent.com/d/${fileId}`, cors: false, via: 'lh3' },
   ];
 }
 
@@ -133,7 +142,7 @@ async function handleDrivePdf(req, url) {
 
   // If you didn’t set an API key, try fallbacks
   if (DRIVE_API_KEY === 'YOUR_GOOGLE_API_KEY' || !DRIVE_API_KEY) {
-    // We’ll still try v3 first (sometimes works even w/out key for fully public files),
+    // We'll still try v3 first (sometimes works even w/out key for public files),
     // but if HEAD/probe fails we’ll pass-through from uc/lh3.
   }
 
@@ -272,13 +281,15 @@ self.addEventListener('fetch', (event) => {
           return preload;
         }
         const fresh = await fetch(req);
-        const copy = fresh.clone();
-        const key = cacheKeyFor(req);
-        if (key) caches.open(CACHE_NAME).then((c) => c.put(key, copy));
+        if (fresh && fresh.ok) {
+          const copy = fresh.clone();
+          const key = cacheKeyFor(req);
+          if (key) caches.open(CACHE_NAME).then((c) => c.put(key, copy));
+        }
         return fresh;
       } catch (_) {
         const cached = await caches.match(cacheKeyFor(req) || req);
-        return cached || caches.match('./index.html');
+        return cached || caches.match(SCOPE_PATH + 'index.html');
       }
     })());
     return;
